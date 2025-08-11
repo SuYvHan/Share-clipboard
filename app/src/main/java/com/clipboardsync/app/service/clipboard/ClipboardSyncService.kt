@@ -256,21 +256,67 @@ class ClipboardSyncService : Service() {
     }
     
     private fun connectWebSocket() {
+        // 连接WebSocket
         serviceScope.launch {
             try {
                 val config = configRepository.getConfig().first()
+                Log.d(tag, "Connecting to WebSocket with config: ${config.websocketUrl}")
                 webSocketClient.connect(config)
-                
-                // 监听WebSocket消息
-                webSocketClient.messageFlow.collect { message ->
-                    handleWebSocketMessage(message)
-                }
             } catch (e: Exception) {
                 Log.e(tag, "Error connecting WebSocket", e)
             }
         }
+
+        // 在独立协程中监听WebSocket消息
+        serviceScope.launch {
+            try {
+                webSocketClient.messageFlow.collect { message ->
+                    handleWebSocketMessage(message)
+                }
+            } catch (e: Exception) {
+                Log.e(tag, "Error handling WebSocket messages", e)
+            }
+        }
+
+        // 在独立协程中监听连接状态
+        serviceScope.launch {
+            try {
+                webSocketClient.connectionStateFlow.collect { state ->
+                    handleConnectionStateChange(state)
+                }
+            } catch (e: Exception) {
+                Log.e(tag, "Error handling connection state", e)
+            }
+        }
     }
-    
+
+    private fun handleConnectionStateChange(state: WebSocketClient.ConnectionState) {
+        Log.d(tag, "WebSocket connection state changed: $state")
+        when (state) {
+            is WebSocketClient.ConnectionState.Connected -> {
+                Log.i(tag, "WebSocket connected successfully")
+                updateNotification("已连接到服务器")
+            }
+
+            is WebSocketClient.ConnectionState.Disconnected -> {
+                Log.w(tag, "WebSocket disconnected")
+                updateNotification("与服务器断开连接")
+            }
+            is WebSocketClient.ConnectionState.Error -> {
+                Log.e(tag, "WebSocket error: ${state.message}")
+                updateNotification("连接错误: ${state.message}")
+            }
+            is WebSocketClient.ConnectionState.Reconnecting -> {
+                Log.i(tag, "WebSocket reconnecting, attempt: ${state.attempt}")
+                updateNotification("重连中 (${state.attempt})")
+            }
+            is WebSocketClient.ConnectionState.Failed -> {
+                Log.e(tag, "WebSocket failed: ${state.message}")
+                updateNotification("连接失败: ${state.message}")
+            }
+        }
+    }
+
     private suspend fun handleWebSocketMessage(message: com.clipboardsync.app.domain.model.WebSocketMessage) {
         when (message.type) {
             "sync" -> {

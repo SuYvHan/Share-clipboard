@@ -2,7 +2,6 @@ package com.clipboardsync.app.network.websocket
 
 import android.util.Log
 import com.clipboardsync.app.domain.model.AppConfig
-import com.clipboardsync.app.domain.model.AuthRequest
 import com.clipboardsync.app.domain.model.ClipboardItem
 import com.clipboardsync.app.domain.model.WebSocketMessage
 import com.clipboardsync.app.domain.model.WebSocketRequest
@@ -40,16 +39,20 @@ class WebSocketClient @Inject constructor() {
     private val json = Json {
         ignoreUnknownKeys = true
         coerceInputValues = true
+        allowStructuredMapKeys = true
     }
     
     private val okHttpClient = OkHttpClient.Builder()
         .pingInterval(30, TimeUnit.SECONDS)
+        .connectTimeout(10, TimeUnit.SECONDS)
+        .readTimeout(0, TimeUnit.SECONDS) // 无限读取超时，保持长连接
+        .writeTimeout(10, TimeUnit.SECONDS)
         .build()
     
     fun connect(config: AppConfig) {
         currentConfig = config
-        val url = config.websocketUrl
-        Log.d(tag, "Connecting to WebSocket: $url")
+        val url = config.websocketUrlWithAuth
+        Log.d(tag, "Connecting to WebSocket with auth: $url")
         shouldReconnect = true
         
         val request = Request.Builder()
@@ -58,13 +61,11 @@ class WebSocketClient @Inject constructor() {
         
         webSocket = okHttpClient.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
-                Log.d(tag, "WebSocket connected")
+                Log.i(tag, "WebSocket connected successfully with URL auth")
                 isConnected = true
                 reconnectAttempts = 0
 
-                // 连接成功后发送认证信息
-                sendAuthRequest()
-
+                // URL参数认证，连接成功即表示认证成功
                 coroutineScope.launch {
                     _connectionStateFlow.emit(ConnectionState.Connected)
                 }
@@ -91,13 +92,18 @@ class WebSocketClient @Inject constructor() {
             }
             
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-                Log.d(tag, "WebSocket closed: $code $reason")
+                Log.w(tag, "WebSocket closed: $code $reason")
                 isConnected = false
                 coroutineScope.launch {
                     _connectionStateFlow.emit(ConnectionState.Disconnected)
                 }
-                if (shouldReconnect) {
-                    scheduleReconnect(url)
+
+                // 只有在非正常关闭且应该重连时才重连
+                if (shouldReconnect && code != 1000) {
+                    Log.i(tag, "Unexpected close, will attempt to reconnect")
+                    scheduleReconnect()
+                } else {
+                    Log.i(tag, "Normal close or reconnect disabled, not reconnecting")
                 }
             }
             
@@ -108,13 +114,13 @@ class WebSocketClient @Inject constructor() {
                     _connectionStateFlow.emit(ConnectionState.Error(t.message ?: "Unknown error"))
                 }
                 if (shouldReconnect) {
-                    scheduleReconnect(url)
+                    scheduleReconnect()
                 }
             }
         })
     }
     
-    private fun scheduleReconnect(@Suppress("UNUSED_PARAMETER") url: String) {
+    private fun scheduleReconnect() {
         if (reconnectAttempts < maxReconnectAttempts) {
             reconnectAttempts++
             Log.d(tag, "Scheduling reconnect attempt $reconnectAttempts in ${reconnectDelayMs}ms")
@@ -188,32 +194,19 @@ class WebSocketClient @Inject constructor() {
     }
     
     fun disconnect() {
-        Log.d(tag, "Disconnecting WebSocket")
+        Log.d(tag, "Manually disconnecting WebSocket")
         shouldReconnect = false
-        isConnected = false
         webSocket?.close(1000, "Client disconnect")
         webSocket = null
-    }
-    
-    fun isConnected(): Boolean = isConnected
-
-    private fun sendAuthRequest() {
-        currentConfig?.let { config ->
-            try {
-                val authRequest = AuthRequest(
-                    authKey = config.authKey.takeIf { it.isNotEmpty() },
-                    authValue = config.authValue.takeIf { it.isNotEmpty() },
-                    deviceId = config.deviceId.takeIf { it.isNotEmpty() }
-                )
-
-                val jsonString = json.encodeToString(authRequest)
-                webSocket?.send(jsonString)
-                Log.d(tag, "Sent auth request: $jsonString")
-            } catch (e: Exception) {
-                Log.e(tag, "Failed to send auth request", e)
-            }
+        isConnected = false
+        coroutineScope.launch {
+            _connectionStateFlow.emit(ConnectionState.Disconnected)
         }
     }
+
+    fun isConnected(): Boolean = isConnected
+
+
 
     sealed class ConnectionState {
         object Connected : ConnectionState()

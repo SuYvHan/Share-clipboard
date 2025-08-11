@@ -157,6 +157,12 @@ class SettingsViewModel @Inject constructor(
                 Log.d(tag, "Config saved successfully")
                 _uiState.update { it.copy(message = "服务器配置已保存", error = null) }
 
+                // 等待一下让配置生效
+                kotlinx.coroutines.delay(100)
+
+                // 测试当前配置
+                testCurrentConfig()
+
                 // 配置保存成功后，尝试连接WebSocket
                 tryConnectWebSocket()
             } catch (e: Exception) {
@@ -250,12 +256,34 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch {
             try {
                 val currentConfig = config.value
-                Log.d(tag, "Attempting WebSocket connection with config: ${currentConfig.websocketUrl}")
+                Log.d(tag, "Attempting WebSocket connection with config:")
+                Log.d(tag, "  - Base URL: ${currentConfig.websocketUrl}")
+                Log.d(tag, "  - Auth URL: ${currentConfig.websocketUrlWithAuth}")
+                Log.d(tag, "  - DeviceId: '${currentConfig.deviceId}'")
+                Log.d(tag, "  - AuthKey: '${currentConfig.authKey}'")
+                Log.d(tag, "  - AuthValue: '${currentConfig.authValue}'")
+
                 webSocketClient.connect(currentConfig)
             } catch (e: Exception) {
                 Log.e(tag, "Failed to connect WebSocket", e)
                 _uiState.update { it.copy(error = "连接失败: ${e.message}") }
             }
+        }
+    }
+
+    // 添加一个测试方法来验证配置
+    fun testCurrentConfig() {
+        viewModelScope.launch {
+            val currentConfig = config.value
+            Log.i(tag, "=== Current Config Test ===")
+            Log.i(tag, "ServerHost: '${currentConfig.serverHost}'")
+            Log.i(tag, "WebSocketPort: ${currentConfig.websocketPort}")
+            Log.i(tag, "DeviceId: '${currentConfig.deviceId}'")
+            Log.i(tag, "AuthKey: '${currentConfig.authKey}'")
+            Log.i(tag, "AuthValue: '${currentConfig.authValue}'")
+            Log.i(tag, "WebSocketUrl: '${currentConfig.websocketUrl}'")
+            Log.i(tag, "WebSocketUrlWithAuth: '${currentConfig.websocketUrlWithAuth}'")
+            Log.i(tag, "=== End Config Test ===")
         }
     }
 }

@@ -24,4 +24,27 @@ data class AppConfig(
         } else {
             "ws://$serverHost:$websocketPort/"
         }
+
+    val websocketUrlWithAuth: String
+        get() {
+            val baseUrl = websocketUrl
+            val params = mutableListOf<String>()
+
+            // 添加设备ID
+            if (deviceId.isNotEmpty()) {
+                params.add("deviceId=$deviceId")
+            }
+
+            // 添加认证参数
+            if (authKey.isNotEmpty() && authValue.isNotEmpty()) {
+                params.add("authKey=$authKey")
+                params.add("authValue=$authValue")
+            }
+
+            return if (params.isNotEmpty()) {
+                "$baseUrl?${params.joinToString("&")}"
+            } else {
+                baseUrl
+            }
+        }
 }

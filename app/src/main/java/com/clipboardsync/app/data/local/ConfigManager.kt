@@ -89,10 +89,17 @@ class ConfigManager @Inject constructor(
         dataStore.edit { preferences ->
             preferences[SERVER_HOST] = host
             preferences[WEBSOCKET_PORT] = websocketPort
-            // 总是保存设备ID，即使为空
-            preferences[DEVICE_ID] = deviceId
+            // 如果设备ID为空，生成一个新的；否则使用提供的ID
+            val finalDeviceId = if (deviceId.isBlank()) {
+                // 检查是否已经有设备ID，如果没有则生成新的
+                preferences[DEVICE_ID] ?: generateDeviceId()
+            } else {
+                deviceId
+            }
+            preferences[DEVICE_ID] = finalDeviceId
             preferences[AUTH_KEY] = authKey
             preferences[AUTH_VALUE] = authValue
+            Log.d(tag, "Final deviceId saved: '$finalDeviceId'")
         }
         Log.d(tag, "DataStore save completed")
     }
