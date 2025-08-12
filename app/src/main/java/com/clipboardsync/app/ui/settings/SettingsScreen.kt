@@ -54,6 +54,7 @@ fun SettingsScreen(
                 uiState = uiState,
                 onServerHostChange = viewModel::updateServerHost,
                 onWebSocketPortChange = viewModel::updateWebSocketPort,
+                onHttpPortChange = viewModel::updateHttpPort,
                 onDeviceIdChange = viewModel::updateDeviceId,
                 onAuthKeyChange = viewModel::updateAuthKey,
                 onAuthValueChange = viewModel::updateAuthValue,
@@ -126,6 +127,7 @@ private fun ServerConfigSection(
     uiState: SettingsUiState,
     onServerHostChange: (String) -> Unit,
     onWebSocketPortChange: (String) -> Unit,
+    onHttpPortChange: (String) -> Unit,
     onDeviceIdChange: (String) -> Unit,
     onAuthKeyChange: (String) -> Unit,
     onAuthValueChange: (String) -> Unit,
@@ -169,7 +171,22 @@ private fun ServerConfigSection(
                     { Text("WebSocket通信端口，用于实时数据同步") }
                 }
             )
-            
+
+            // HTTP端口配置
+            OutlinedTextField(
+                value = uiState.httpPort,
+                onValueChange = onHttpPortChange,
+                label = { Text("HTTP端口 *") },
+                placeholder = { Text("3001") },
+                modifier = Modifier.fillMaxWidth(),
+                isError = uiState.httpPort.toIntOrNull() == null || uiState.httpPort.isBlank(),
+                supportingText = if (uiState.httpPort.toIntOrNull() == null || uiState.httpPort.isBlank()) {
+                    { Text("必填字段", color = MaterialTheme.colorScheme.error) }
+                } else {
+                    { Text("HTTP端口，用于上传剪切板内容") }
+                }
+            )
+
             OutlinedTextField(
                 value = uiState.deviceId,
                 onValueChange = onDeviceIdChange,

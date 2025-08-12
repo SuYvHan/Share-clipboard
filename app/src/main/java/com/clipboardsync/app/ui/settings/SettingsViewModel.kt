@@ -42,7 +42,11 @@ class SettingsViewModel @Inject constructor(
     fun updateWebSocketPort(port: String) {
         _uiState.update { it.copy(websocketPort = port) }
     }
-    
+
+    fun updateHttpPort(port: String) {
+        _uiState.update { it.copy(httpPort = port) }
+    }
+
     fun updateDeviceId(deviceId: String) {
         _uiState.update { it.copy(deviceId = deviceId) }
     }
@@ -145,10 +149,17 @@ class SettingsViewModel @Inject constructor(
                     return@launch
                 }
 
+                val httpPort = state.httpPort.toIntOrNull()
+                if (httpPort == null || httpPort <= 0 || httpPort > 65535) {
+                    _uiState.update { it.copy(error = "HTTP端口必须是1-65535之间的数字") }
+                    return@launch
+                }
+
                 // 保存所有服务器配置（包括认证信息）
                 configRepository.updateServerConfig(
                     host = state.serverHost.trim(),
                     websocketPort = websocketPort,
+                    httpPort = httpPort,
                     deviceId = state.deviceId.trim(),
                     authKey = state.authKey.trim(),
                     authValue = state.authValue.trim()
@@ -163,8 +174,8 @@ class SettingsViewModel @Inject constructor(
                 // 测试当前配置
                 testCurrentConfig()
 
-                // 配置保存成功后，尝试连接WebSocket
-                tryConnectWebSocket()
+                // 配置保存成功后，先断开现有连接，再重新连接
+                reconnectWebSocket()
             } catch (e: Exception) {
                 Log.e(tag, "Failed to save config", e)
                 _uiState.update { it.copy(error = "保存失败: ${e.message}") }
@@ -236,11 +247,12 @@ class SettingsViewModel @Inject constructor(
     }
 
     fun updateUiFromConfig(currentConfig: AppConfig) {
-        Log.d(tag, "Updating UI from config - deviceId: '${currentConfig.deviceId}', authKey: '${currentConfig.authKey}', authValue: '${currentConfig.authValue}'")
+        Log.d(tag, "Updating UI from config - deviceId: '${currentConfig.deviceId}', authKey: '${currentConfig.authKey}', authValue: '${currentConfig.authValue}', httpPort: ${currentConfig.httpPort}")
         _uiState.update {
             it.copy(
                 serverHost = currentConfig.serverHost,
                 websocketPort = currentConfig.websocketPort.toString(),
+                httpPort = currentConfig.httpPort.toString(),
                 deviceId = currentConfig.deviceId,
                 authKey = currentConfig.authKey,
                 authValue = currentConfig.authValue
@@ -271,6 +283,27 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
+    private fun reconnectWebSocket() {
+        viewModelScope.launch {
+            try {
+                val currentConfig = config.value
+                Log.d(tag, "Settings requesting WebSocket reconnect with new config:")
+                Log.d(tag, "  - Auth URL: ${currentConfig.websocketUrlWithAuth}")
+                Log.d(tag, "  - DeviceId: '${currentConfig.deviceId}'")
+                Log.d(tag, "  - AuthKey: '${currentConfig.authKey}'")
+                Log.d(tag, "  - AuthValue: '${currentConfig.authValue}'")
+
+                // 强制断开并重连，确保使用新配置
+                webSocketClient.disconnect()
+                kotlinx.coroutines.delay(1000) // 等待更长时间确保完全断开
+                webSocketClient.connect(currentConfig)
+            } catch (e: Exception) {
+                Log.e(tag, "Failed to reconnect WebSocket", e)
+                _uiState.update { it.copy(error = "重连失败: ${e.message}") }
+            }
+        }
+    }
+
     // 添加一个测试方法来验证配置
     fun testCurrentConfig() {
         viewModelScope.launch {
@@ -278,11 +311,13 @@ class SettingsViewModel @Inject constructor(
             Log.i(tag, "=== Current Config Test ===")
             Log.i(tag, "ServerHost: '${currentConfig.serverHost}'")
             Log.i(tag, "WebSocketPort: ${currentConfig.websocketPort}")
+            Log.i(tag, "HttpPort: ${currentConfig.httpPort}")
             Log.i(tag, "DeviceId: '${currentConfig.deviceId}'")
             Log.i(tag, "AuthKey: '${currentConfig.authKey}'")
             Log.i(tag, "AuthValue: '${currentConfig.authValue}'")
             Log.i(tag, "WebSocketUrl: '${currentConfig.websocketUrl}'")
             Log.i(tag, "WebSocketUrlWithAuth: '${currentConfig.websocketUrlWithAuth}'")
+            Log.i(tag, "HttpUrl: '${currentConfig.httpUrl}'")
             Log.i(tag, "=== End Config Test ===")
         }
     }
@@ -294,6 +329,7 @@ data class SettingsUiState(
     val error: String? = null,
     val serverHost: String = "47.239.194.151",
     val websocketPort: String = "3002",
+    val httpPort: String = "3001",
     val deviceId: String = "",
     val authKey: String = "",
     val authValue: String = ""

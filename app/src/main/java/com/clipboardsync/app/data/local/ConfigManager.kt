@@ -29,6 +29,7 @@ class ConfigManager @Inject constructor(
     companion object {
         private val SERVER_HOST = stringPreferencesKey("server_host")
         private val WEBSOCKET_PORT = intPreferencesKey("websocket_port")
+        private val HTTP_PORT = intPreferencesKey("http_port")
         private val DEVICE_ID = stringPreferencesKey("device_id")
         private val AUTO_SYNC = booleanPreferencesKey("auto_sync")
         private val SYNC_IMAGES = booleanPreferencesKey("sync_images")
@@ -51,6 +52,7 @@ class ConfigManager @Inject constructor(
         AppConfig(
             serverHost = preferences[SERVER_HOST] ?: "47.239.194.151",
             websocketPort = preferences[WEBSOCKET_PORT] ?: 3002,
+            httpPort = preferences[HTTP_PORT] ?: 3001,
             deviceId = deviceId,
             autoSync = preferences[AUTO_SYNC] ?: true,
             syncImages = preferences[SYNC_IMAGES] ?: true,
@@ -68,8 +70,8 @@ class ConfigManager @Inject constructor(
     suspend fun updateConfig(config: AppConfig) {
         dataStore.edit { preferences ->
             preferences[SERVER_HOST] = config.serverHost
-
             preferences[WEBSOCKET_PORT] = config.websocketPort
+            preferences[HTTP_PORT] = config.httpPort
             preferences[DEVICE_ID] = config.deviceId.ifEmpty { generateDeviceId() }
             preferences[AUTO_SYNC] = config.autoSync
             preferences[SYNC_IMAGES] = config.syncImages
@@ -84,11 +86,12 @@ class ConfigManager @Inject constructor(
         }
     }
     
-    suspend fun updateServerConfig(host: String, websocketPort: Int, deviceId: String = "", authKey: String = "", authValue: String = "") {
-        Log.d(tag, "Saving to DataStore - deviceId: '$deviceId', authKey: '$authKey', authValue: '$authValue'")
+    suspend fun updateServerConfig(host: String, websocketPort: Int, httpPort: Int = 3001, deviceId: String = "", authKey: String = "", authValue: String = "") {
+        Log.d(tag, "Saving to DataStore - deviceId: '$deviceId', authKey: '$authKey', authValue: '$authValue', httpPort: $httpPort")
         dataStore.edit { preferences ->
             preferences[SERVER_HOST] = host
             preferences[WEBSOCKET_PORT] = websocketPort
+            preferences[HTTP_PORT] = httpPort
             // 如果设备ID为空，生成一个新的；否则使用提供的ID
             val finalDeviceId = if (deviceId.isBlank()) {
                 // 检查是否已经有设备ID，如果没有则生成新的

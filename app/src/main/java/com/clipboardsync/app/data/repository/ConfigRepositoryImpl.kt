@@ -18,8 +18,8 @@ class ConfigRepositoryImpl @Inject constructor(
         configManager.updateConfig(config)
     }
     
-    override suspend fun updateServerConfig(host: String, websocketPort: Int, deviceId: String, authKey: String, authValue: String) {
-        configManager.updateServerConfig(host, websocketPort, deviceId, authKey, authValue)
+    override suspend fun updateServerConfig(host: String, websocketPort: Int, httpPort: Int, deviceId: String, authKey: String, authValue: String) {
+        configManager.updateServerConfig(host, websocketPort, httpPort, deviceId, authKey, authValue)
     }
     
     override suspend fun updateDeviceId(deviceId: String) {

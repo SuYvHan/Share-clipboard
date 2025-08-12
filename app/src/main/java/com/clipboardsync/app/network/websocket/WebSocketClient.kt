@@ -22,6 +22,7 @@ class WebSocketClient @Inject constructor() {
     private val tag = "WebSocketClient"
     private var webSocket: WebSocket? = null
     private var isConnected = false
+    private var isConnecting = false
     private var shouldReconnect = true
     private var reconnectAttempts = 0
     private val maxReconnectAttempts = 5
@@ -50,10 +51,17 @@ class WebSocketClient @Inject constructor() {
         .build()
     
     fun connect(config: AppConfig) {
+        // 如果已经连接或正在连接，先断开
+        if (isConnected || isConnecting || webSocket != null) {
+            Log.d(tag, "Already connected or connecting, disconnecting first")
+            disconnect()
+        }
+
         currentConfig = config
         val url = config.websocketUrlWithAuth
         Log.d(tag, "Connecting to WebSocket with auth: $url")
         shouldReconnect = true
+        isConnecting = true
         
         val request = Request.Builder()
             .url(url)
@@ -63,6 +71,7 @@ class WebSocketClient @Inject constructor() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 Log.i(tag, "WebSocket connected successfully with URL auth")
                 isConnected = true
+                isConnecting = false
                 reconnectAttempts = 0
 
                 // URL参数认证，连接成功即表示认证成功
@@ -110,6 +119,7 @@ class WebSocketClient @Inject constructor() {
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                 Log.e(tag, "WebSocket error", t)
                 isConnected = false
+                isConnecting = false
                 coroutineScope.launch {
                     _connectionStateFlow.emit(ConnectionState.Error(t.message ?: "Unknown error"))
                 }
@@ -196,9 +206,10 @@ class WebSocketClient @Inject constructor() {
     fun disconnect() {
         Log.d(tag, "Manually disconnecting WebSocket")
         shouldReconnect = false
+        isConnected = false
+        isConnecting = false
         webSocket?.close(1000, "Client disconnect")
         webSocket = null
-        isConnected = false
         coroutineScope.launch {
             _connectionStateFlow.emit(ConnectionState.Disconnected)
         }
@@ -206,7 +217,29 @@ class WebSocketClient @Inject constructor() {
 
     fun isConnected(): Boolean = isConnected
 
+    fun isConnectedOrConnecting(): Boolean = isConnected || isConnecting
 
+    fun reconnect(config: AppConfig) {
+        Log.d(tag, "Reconnecting WebSocket with new config")
+        coroutineScope.launch {
+            // 先断开现有连接
+            if (isConnected) {
+                Log.d(tag, "Disconnecting existing connection")
+                shouldReconnect = false
+                isConnected = false
+                webSocket?.close(1000, "Reconnecting with new config")
+                webSocket = null
+                _connectionStateFlow.emit(ConnectionState.Disconnected)
+
+                // 等待一下确保连接完全断开
+                kotlinx.coroutines.delay(500)
+            }
+
+            // 使用新配置重新连接
+            Log.d(tag, "Connecting with new config")
+            connect(config)
+        }
+    }
 
     sealed class ConnectionState {
         object Connected : ConnectionState()

@@ -256,15 +256,19 @@ class ClipboardSyncService : Service() {
     }
     
     private fun connectWebSocket() {
-        // 连接WebSocket
-        serviceScope.launch {
-            try {
-                val config = configRepository.getConfig().first()
-                Log.d(tag, "Connecting to WebSocket with config: ${config.websocketUrl}")
-                webSocketClient.connect(config)
-            } catch (e: Exception) {
-                Log.e(tag, "Error connecting WebSocket", e)
+        // 只在未连接且未连接中时才连接WebSocket
+        if (!webSocketClient.isConnectedOrConnecting()) {
+            serviceScope.launch {
+                try {
+                    val config = configRepository.getConfig().first()
+                    Log.d(tag, "Service connecting to WebSocket with config: ${config.websocketUrl}")
+                    webSocketClient.connect(config)
+                } catch (e: Exception) {
+                    Log.e(tag, "Error connecting WebSocket", e)
+                }
             }
+        } else {
+            Log.d(tag, "WebSocket already connected or connecting, skipping service connection")
         }
 
         // 在独立协程中监听WebSocket消息
@@ -286,6 +290,18 @@ class ClipboardSyncService : Service() {
                 }
             } catch (e: Exception) {
                 Log.e(tag, "Error handling connection state", e)
+            }
+        }
+    }
+
+    fun reconnectWebSocket() {
+        serviceScope.launch {
+            try {
+                val config = configRepository.getConfig().first()
+                Log.d(tag, "Service reconnecting WebSocket with new config")
+                webSocketClient.reconnect(config)
+            } catch (e: Exception) {
+                Log.e(tag, "Error reconnecting WebSocket in service", e)
             }
         }
     }
