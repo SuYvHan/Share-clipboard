@@ -18,6 +18,7 @@ import com.clipboardsync.app.domain.model.ClipboardItem
 import com.clipboardsync.app.domain.model.ClipboardType
 import com.clipboardsync.app.domain.repository.ClipboardRepository
 import com.clipboardsync.app.domain.repository.ConfigRepository
+import com.clipboardsync.app.network.http.ClipboardHttpService
 import com.clipboardsync.app.network.websocket.WebSocketClient
 import com.clipboardsync.app.ui.main.MainActivity
 import dagger.hilt.android.AndroidEntryPoint
@@ -33,15 +34,19 @@ class ClipboardSyncService : Service() {
     
     @Inject
     lateinit var clipboardRepository: ClipboardRepository
-    
+
     @Inject
     lateinit var configRepository: ConfigRepository
-    
+
     @Inject
     lateinit var webSocketClient: WebSocketClient
+
+    @Inject
+    lateinit var clipboardHttpService: ClipboardHttpService
     
     private lateinit var clipboardManager: ClipboardManager
     private var lastClipboardContent: String? = null
+    private var isProcessingClipboard = false
     private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     
     private val tag = "ClipboardSyncService"
@@ -154,19 +159,23 @@ class ClipboardSyncService : Service() {
     
     private suspend fun handleClipboardChange() {
         try {
+            // 防止重复处理
+            if (isProcessingClipboard) return
+            isProcessingClipboard = true
+
             val config = configRepository.getConfig().first()
             if (!config.autoSync) return
-            
+
             val clipData = clipboardManager.primaryClip
             if (clipData == null || clipData.itemCount == 0) return
-            
+
             val item = clipData.getItemAt(0)
             val currentContent = when {
                 item.text != null -> item.text.toString()
                 item.uri != null -> item.uri.toString()
                 else -> return
             }
-            
+
             // 避免重复处理相同内容
             if (currentContent == lastClipboardContent) return
             lastClipboardContent = currentContent
@@ -178,25 +187,55 @@ class ClipboardSyncService : Service() {
             }
 
             clipboardItem?.let { validItem ->
-                // 保存到本地数据库
-                clipboardRepository.insertItem(validItem, isSynced = false)
+                // 复制的内容直接发送，不保存到本地数据库
+                var syncSuccess = false
 
                 // 通过WebSocket同步到服务器
                 if (webSocketClient.isConnected()) {
                     webSocketClient.syncClipboardItem(validItem)
-                    updateNotification("已同步: ${getContentPreview(validItem)}")
-                } else {
-                    updateNotification("离线保存: ${getContentPreview(validItem)}")
+                    syncSuccess = true
+                    Log.d(tag, "Local clipboard sent via WebSocket: ${validItem.type}")
                 }
 
-                Log.d(tag, "Clipboard item processed: ${validItem.type}")
+                // 同时通过HTTP上传到服务器
+                uploadToHttpServer(validItem, config)
+
+                // 只显示同步信息，不保存为剪切板块
+                if (syncSuccess) {
+                    updateNotification("已发送: ${getContentPreview(validItem)}")
+                } else {
+                    updateNotification("发送中: ${getContentPreview(validItem)}")
+                }
+
+                Log.d(tag, "Local clipboard content sent (not saved): ${validItem.type}")
             }
             
         } catch (e: Exception) {
             Log.e(tag, "Error handling clipboard change", e)
+        } finally {
+            isProcessingClipboard = false
         }
     }
-    
+
+    private fun uploadToHttpServer(clipboardItem: ClipboardItem, config: AppConfig) {
+        serviceScope.launch {
+            try {
+                Log.d(tag, "Uploading clipboard item to HTTP server: ${config.httpUrl}")
+                val result = clipboardHttpService.uploadClipboardContent(config, clipboardItem)
+                result.fold(
+                    onSuccess = { response ->
+                        Log.i(tag, "HTTP upload successful: $response")
+                    },
+                    onFailure = { error ->
+                        Log.w(tag, "HTTP upload failed: ${error.message}")
+                    }
+                )
+            } catch (e: Exception) {
+                Log.e(tag, "HTTP upload error", e)
+            }
+        }
+    }
+
     private fun createTextClipboardItem(content: String, config: AppConfig): ClipboardItem {
         val now = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.getDefault()).format(Date())
         return ClipboardItem(
@@ -340,20 +379,26 @@ class ClipboardSyncService : Service() {
                     // 避免同步自己发送的内容
                     val config = configRepository.getConfig().first()
                     if (item.deviceId != config.deviceId) {
+                        // 保存来自其他设备的同步内容为剪切板块
                         clipboardRepository.insertItem(item, isSynced = true)
                         updateNotification("收到同步: ${getContentPreview(item)}")
+                        Log.d(tag, "Received and saved sync from device: ${item.deviceId}")
+                    } else {
+                        Log.d(tag, "Ignored sync from own device: ${item.deviceId}")
                     }
                 }
             }
             "delete" -> {
                 message.id?.let { id ->
                     clipboardRepository.deleteItem(id)
+                    Log.d(tag, "Deleted item: $id")
                 }
             }
             "all_content" -> {
                 // 处理获取到的所有内容
                 val count = message.count ?: 0
                 updateNotification("已同步 $count 条记录")
+                Log.d(tag, "Synced $count items")
             }
         }
     }

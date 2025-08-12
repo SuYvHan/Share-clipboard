@@ -52,7 +52,7 @@ class ConfigManager @Inject constructor(
         AppConfig(
             serverHost = preferences[SERVER_HOST] ?: "47.239.194.151",
             websocketPort = preferences[WEBSOCKET_PORT] ?: 3002,
-            httpPort = preferences[HTTP_PORT] ?: 3001,
+            httpPort = preferences[HTTP_PORT] ?: 80,
             deviceId = deviceId,
             autoSync = preferences[AUTO_SYNC] ?: true,
             syncImages = preferences[SYNC_IMAGES] ?: true,
@@ -86,7 +86,7 @@ class ConfigManager @Inject constructor(
         }
     }
     
-    suspend fun updateServerConfig(host: String, websocketPort: Int, httpPort: Int = 3001, deviceId: String = "", authKey: String = "", authValue: String = "") {
+    suspend fun updateServerConfig(host: String, websocketPort: Int, httpPort: Int = 80, deviceId: String = "", authKey: String = "", authValue: String = "") {
         Log.d(tag, "Saving to DataStore - deviceId: '$deviceId', authKey: '$authKey', authValue: '$authValue', httpPort: $httpPort")
         dataStore.edit { preferences ->
             preferences[SERVER_HOST] = host

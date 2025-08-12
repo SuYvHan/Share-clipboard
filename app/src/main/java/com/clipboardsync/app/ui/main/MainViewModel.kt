@@ -32,6 +32,7 @@ class MainViewModel @Inject constructor(
             initialValue = AppConfig()
         )
     
+    // 显示来自其他设备的同步内容
     val clipboardItems: StateFlow<List<ClipboardItem>> = clipboardRepository.getAllItems()
         .stateIn(
             scope = viewModelScope,

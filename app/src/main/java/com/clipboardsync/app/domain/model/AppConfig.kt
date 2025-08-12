@@ -6,7 +6,7 @@ import kotlinx.serialization.Serializable
 data class AppConfig(
     val serverHost: String = "",
     val websocketPort: Int = 3002,
-    val httpPort: Int = 3001,
+    val httpPort: Int = 80,
     val deviceId: String = "",
     val autoSync: Boolean = true,
     val syncImages: Boolean = true,
@@ -28,9 +28,17 @@ data class AppConfig(
 
     val httpUrl: String
         get() = if (useSecureConnection) {
-            "https://$serverHost:$httpPort"
+            if (httpPort == 443) {
+                "https://$serverHost"
+            } else {
+                "https://$serverHost:$httpPort"
+            }
         } else {
-            "http://$serverHost:$httpPort"
+            if (httpPort == 80) {
+                "http://$serverHost"
+            } else {
+                "http://$serverHost:$httpPort"
+            }
         }
 
     val websocketUrlWithAuth: String

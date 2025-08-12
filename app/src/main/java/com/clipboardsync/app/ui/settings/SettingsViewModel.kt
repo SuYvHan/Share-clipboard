@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import com.clipboardsync.app.domain.model.AppConfig
 import com.clipboardsync.app.domain.repository.ConfigRepository
 import com.clipboardsync.app.domain.repository.ClipboardRepository
+import com.clipboardsync.app.network.http.ClipboardHttpService
 import com.clipboardsync.app.network.websocket.WebSocketClient
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.*
@@ -16,7 +17,8 @@ import javax.inject.Inject
 class SettingsViewModel @Inject constructor(
     private val configRepository: ConfigRepository,
     private val clipboardRepository: ClipboardRepository,
-    private val webSocketClient: WebSocketClient
+    private val webSocketClient: WebSocketClient,
+    private val clipboardHttpService: ClipboardHttpService
 ) : ViewModel() {
 
     private val tag = "SettingsViewModel"
@@ -176,6 +178,9 @@ class SettingsViewModel @Inject constructor(
 
                 // 配置保存成功后，先断开现有连接，再重新连接
                 reconnectWebSocket()
+
+                // 测试HTTP连接
+                testHttpConnection()
             } catch (e: Exception) {
                 Log.e(tag, "Failed to save config", e)
                 _uiState.update { it.copy(error = "保存失败: ${e.message}") }
@@ -321,6 +326,29 @@ class SettingsViewModel @Inject constructor(
             Log.i(tag, "=== End Config Test ===")
         }
     }
+
+    private fun testHttpConnection() {
+        viewModelScope.launch {
+            try {
+                val currentConfig = config.value
+                Log.d(tag, "Testing HTTP connection:")
+                Log.d(tag, "  - HTTP URL: ${currentConfig.httpUrl}")
+                Log.d(tag, "  - Auth Header: ${currentConfig.authKey}: ${currentConfig.authValue}")
+
+                val result = clipboardHttpService.testConnection(currentConfig)
+                result.fold(
+                    onSuccess = { response ->
+                        Log.i(tag, "HTTP connection test successful: $response")
+                    },
+                    onFailure = { error ->
+                        Log.w(tag, "HTTP connection test failed: ${error.message}")
+                    }
+                )
+            } catch (e: Exception) {
+                Log.e(tag, "HTTP connection test error", e)
+            }
+        }
+    }
 }
 
 data class SettingsUiState(
@@ -329,7 +357,7 @@ data class SettingsUiState(
     val error: String? = null,
     val serverHost: String = "47.239.194.151",
     val websocketPort: String = "3002",
-    val httpPort: String = "3001",
+    val httpPort: String = "80",
     val deviceId: String = "",
     val authKey: String = "",
     val authValue: String = ""

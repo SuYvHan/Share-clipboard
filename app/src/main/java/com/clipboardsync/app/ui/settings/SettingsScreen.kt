@@ -177,7 +177,7 @@ private fun ServerConfigSection(
                 value = uiState.httpPort,
                 onValueChange = onHttpPortChange,
                 label = { Text("HTTP端口 *") },
-                placeholder = { Text("3001") },
+                placeholder = { Text("80") },
                 modifier = Modifier.fillMaxWidth(),
                 isError = uiState.httpPort.toIntOrNull() == null || uiState.httpPort.isBlank(),
                 supportingText = if (uiState.httpPort.toIntOrNull() == null || uiState.httpPort.isBlank()) {
