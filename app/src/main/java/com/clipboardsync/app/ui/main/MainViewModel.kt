@@ -1,7 +1,10 @@
 package com.clipboardsync.app.ui.main
 
+import android.content.Context
+import android.graphics.Bitmap
 import android.net.Uri
 import androidx.lifecycle.ViewModel
+import com.clipboardsync.app.util.ImageSaveUtils
 import androidx.lifecycle.viewModelScope
 import com.clipboardsync.app.domain.model.AppConfig
 import com.clipboardsync.app.domain.model.ClipboardItem
@@ -103,41 +106,7 @@ class MainViewModel @Inject constructor(
         }
     }
     
-    fun saveImageToGallery(item: ClipboardItem) {
-        if (item.type != ClipboardType.image) return
-        
-        viewModelScope.launch {
-            try {
-                _uiState.update { it.copy(isLoading = true) }
-                val result = saveImageUseCase.saveBase64Image(item.content, item.fileName)
-                result.fold(
-                    onSuccess = { _ ->
-                        _uiState.update {
-                            it.copy(
-                                isLoading = false,
-                                message = "图片已保存到相册"
-                            )
-                        }
-                    },
-                    onFailure = { error ->
-                        _uiState.update { 
-                            it.copy(
-                                isLoading = false,
-                                error = "保存失败: ${error.message}"
-                            )
-                        }
-                    }
-                )
-            } catch (e: Exception) {
-                _uiState.update { 
-                    it.copy(
-                        isLoading = false,
-                        error = "保存失败: ${e.message}"
-                    )
-                }
-            }
-        }
-    }
+
     
     fun copyToClipboard(@Suppress("UNUSED_PARAMETER") content: String) {
         // 这里需要在Activity中实现，因为需要ClipboardManager
@@ -248,6 +217,54 @@ class MainViewModel @Inject constructor(
                     _uiState.update { it.copy(isLoading = false, error = "上传失败: ${error.message}") }
                 }
             )
+        }
+    }
+
+    fun saveImageToGallery(context: Context, item: ClipboardItem) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true, message = "正在保存图片...") }
+
+            try {
+                val result = when {
+                    // 方案一：如果有Bitmap数据，直接保存
+                    item.content.startsWith("data:") -> {
+                        val bitmap = com.clipboardsync.app.util.ImageUtils.base64ToBitmap(item.content)
+                        if (bitmap != null) {
+                            ImageSaveUtils.saveBitmapToGallery(context, bitmap, item.fileName ?: "clipboard_image.jpg")
+                        } else {
+                            Result.failure(Exception("无法解码图片"))
+                        }
+                    }
+                    // 方案二：从URL下载保存
+                    item.type == ClipboardType.image && !item.fileName.isNullOrEmpty() -> {
+                        val config = configRepository.getConfig().first()
+                        val encodedFileName = java.net.URLEncoder.encode(item.fileName, "UTF-8")
+                        val imageUrl = "${config.httpUrl}/api/files/preview?id=${item.id}&name=$encodedFileName"
+
+                        ImageSaveUtils.saveFromUrl(
+                            context = context,
+                            imageUrl = imageUrl,
+                            authKey = config.authKey,
+                            authValue = config.authValue,
+                            httpClient = com.clipboardsync.app.ClipboardSyncApplication.httpClient
+                        )
+                    }
+                    else -> {
+                        Result.failure(Exception("不支持的图片格式"))
+                    }
+                }
+
+                result.fold(
+                    onSuccess = { message ->
+                        _uiState.update { it.copy(isLoading = false, message = message) }
+                    },
+                    onFailure = { error ->
+                        _uiState.update { it.copy(isLoading = false, error = "保存失败: ${error.message}") }
+                    }
+                )
+            } catch (e: Exception) {
+                _uiState.update { it.copy(isLoading = false, error = "保存失败: ${e.message}") }
+            }
         }
     }
 }

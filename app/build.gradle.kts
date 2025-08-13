@@ -52,13 +52,6 @@ android {
     kapt {
         correctErrorTypes = true
         useBuildCache = true
-        arguments {
-            arg("dagger.fastInit", "enabled")
-            arg("dagger.hilt.android.internal.disableAndroidSuperclassValidation", "true")
-            arg("dagger.hilt.android.internal.projectType", "APP")
-            arg("dagger.hilt.internal.useAggregatingRootProcessor", "true")
-            arg("kapt.kotlin.generated", "$projectDir/build/generated/source/kapt/main")
-        }
         javacOptions {
             // 增加Java编译器的堆内存
             option("-Xmx2g")

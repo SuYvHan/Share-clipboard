@@ -334,11 +334,12 @@ fun MainScreen(
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 items(filteredItems) { item ->
+                    val context = LocalContext.current
                     ClipboardItemCard(
                         item = item,
                         onCopy = onCopyToClipboard,
                         onDelete = { viewModel.deleteItem(it) },
-                        onSaveImage = { viewModel.saveImageToGallery(it) }
+                        onSaveImage = { viewModel.saveImageToGallery(context, it) }
                     )
                 }
                 
