@@ -16,30 +16,38 @@ mimeType: MIME类型，如 "text/plain", "application/pdf"（可选）
 图片返还响应为
 一下为举例
 {
-    "success": true,
-    "data": [
-        {
-            "id": "961aea94-16e4-4407-bf6c-af81cbba23b2",
-            "type": "image",
-            "content": "å±å¹æªå¾ 2025-08-12 231803_56b17446-a327-490d-9577-7d3490967ea9.png",
-            "deviceId": "device_1754909073348_j1bgar934",
-            "fileName": "å±å¹æªå¾ 2025-08-12 231803.png",
-            "fileSize": 78024,
-            "mimeType": "image/png",
-            "filePath": "å±å¹æªå¾ 2025-08-12 231803_56b17446-a327-490d-9577-7d3490967ea9.png",
-            "createdAt": "2025-08-13T04:49:26.000Z",
-            "updatedAt": "2025-08-13T04:49:26.000Z"
-        }
-    ],
-    "total": 1,
-    "filteredTotal": 1,
-    "allTotal": 2
+    "type": "sync",
+    "data": {
+        "id": "d03c758b-fcac-4b3f-8563-95bf5f0ba9e6",
+        "type": "image",
+        "content": "å±å¹æªå¾ 2025-07-30 125932_77237333-1cfc-4cbf-872f-83fea32fbbf7.png",
+        "deviceId": "device_1754909073348_j1bgar934",
+        "fileName": "å±å¹æªå¾ 2025-07-30 125932.png",
+        "fileSize": 266768,
+        "mimeType": "image/png",
+        "filePath": "å±å¹æªå¾ 2025-07-30 125932_77237333-1cfc-4cbf-872f-83fea32fbbf7.png",
+        "createdAt": "2025-08-13T05:05:59.000Z",
+        "updatedAt": "2025-08-13T05:05:59.000Z"
+    }
 }
 使用
 一下为举例
 curl -X 'GET' \
-  'http://47.239.194.151/api/files/preview?id=这是从响应的id的值&name=这是使用响应的filePath' \
+  'http://47.239.194.151/api/files/preview?id=这是从响应的id的值&name=这是使用响应的fileName' \
   -H 'accept: application/octet-stream' \
   -H 'X-API-Key: Qw133133'
 这个响应头
   -H 'Header Key: Header Value'还是从认证配置的请求头名称和请求头值获取
+一下是py代码仅供参考预览接口
+  import http.client
+
+conn = http.client.HTTPSConnection("47.239.194.151", 3001)
+payload = ''
+headers = {
+   'X-API-Key': 'Qw133133'
+}
+conn.request("GET", "/api/files/preview?id=1a3a6018-39d3-4c3a-b66a-88086dee9767&name=%C3%A5%C2%B1%C2%8F%C3%A5%C2%B9%C2%95%C3%A6%C2%88%C2%AA%C3%A5%C2%9B%C2%BE%202025-07-30%20130723.png", payload, headers)
+res = conn.getresponse()
+data = res.read()
+print(data.decode("utf-8"))
+'Header Key: Header Value'还是从认证配置的请求头名称和请求头值获取

@@ -12,6 +12,7 @@ data class ClipboardItem(
     val fileName: String? = null,
     val fileSize: Long? = null,
     val mimeType: String? = null,
+    val filePath: String? = null,
     val createdAt: String,
     val updatedAt: String
 )

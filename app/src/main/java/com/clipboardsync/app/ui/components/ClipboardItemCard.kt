@@ -3,7 +3,9 @@ package com.clipboardsync.app.ui.components
 import android.graphics.Bitmap
 import android.util.Log
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -177,41 +179,73 @@ private fun ImageContent(item: ClipboardItem) {
         Log.d("ClipboardItemCard", "Loading image for item: ${item.id}, content: ${item.content}")
 
         try {
-            // 检查是否是文件ID格式（以file_开头）
-            if (item.content.startsWith("file_")) {
-                Log.d("ClipboardItemCard", "Detected file ID format, fetching from preview API...")
+            // 检查是否是图片类型且有fileName（来自WebSocket同步）
+            if (item.type == com.clipboardsync.app.domain.model.ClipboardType.image &&
+                !item.fileName.isNullOrEmpty()) {
+                Log.d("ClipboardItemCard", "Detected synced image, using direct URL display...")
+                Log.d("ClipboardItemCard", "Item ID: ${item.id}, FileName: ${item.fileName}, Content: ${item.content}")
+
+                // 获取用户实际配置（包括端口和协议设置）
+                val config = com.clipboardsync.app.ClipboardSyncApplication.getCurrentConfig()
+                Log.d("ClipboardItemCard", "Using config - httpUrl: ${config.httpUrl}, authKey: ${config.authKey}")
+
+                // 根据API.MD文档：id=响应的data.id值，name=响应的data.fileName值
+                val encodedFileName = java.net.URLEncoder.encode(item.fileName, "UTF-8")
+                val imageUrl = "${config.httpUrl}/api/files/preview?id=${item.id}&name=$encodedFileName"
+                Log.d("ClipboardItemCard", "Direct image URL: $imageUrl")
+
+                // 设置为特殊标记，表示使用URL显示
+                errorMessage = "USE_URL:$imageUrl"
+                isLoading = false
+            } else if (item.content.startsWith("file_")) {
+                // 兼容旧格式：文件ID格式
+                Log.d("ClipboardItemCard", "Detected file ID format, using direct URL display...")
                 Log.d("ClipboardItemCard", "Item ID: ${item.id}, Content: ${item.content}")
 
-                // 使用文件预览接口获取图片数据
-                val filePreviewService = com.clipboardsync.app.network.http.FilePreviewService(
-                    com.clipboardsync.app.ClipboardSyncApplication.httpClient
-                )
-                val config = com.clipboardsync.app.ClipboardSyncApplication.appConfig
+                val config = com.clipboardsync.app.ClipboardSyncApplication.getCurrentConfig()
+                val fileName = item.fileName ?: item.filePath ?: item.content
+                val encodedFileName = java.net.URLEncoder.encode(fileName, "UTF-8")
+                val imageUrl = "${config.httpUrl}/api/files/preview?id=${item.id}&name=$encodedFileName"
+                Log.d("ClipboardItemCard", "Direct image URL (legacy): $imageUrl")
 
-                // 使用item.id作为id参数，item.content作为name参数（因为content包含filePath）
-                val result = filePreviewService.getImagePreview(config, item.id, item.content)
-                result.fold(
-                    onSuccess = { imageBytes ->
-                        Log.d("ClipboardItemCard", "Successfully fetched image data, size: ${imageBytes.size}")
-                        bitmap = ImageUtils.bytesToBitmap(imageBytes)
-                        isLoading = false
-                    },
-                    onFailure = { error ->
-                        Log.e("ClipboardItemCard", "Failed to fetch image preview: ${error.message}")
-                        errorMessage = "加载图片失败: ${error.message}"
-                        isLoading = false
-                    }
-                )
+                errorMessage = "USE_URL:$imageUrl"
+                isLoading = false
             } else if (item.content.startsWith("data:")) {
                 // Base64格式
                 Log.d("ClipboardItemCard", "Detected Base64 format, decoding...")
                 bitmap = ImageUtils.base64ToBitmap(item.content)
+                if (bitmap == null) {
+                    errorMessage = buildString {
+                        append("🚫 Base64解码失败\n\n")
+                        append("📋 内容信息:\n")
+                        append("• 内容长度: ${item.content.length}\n")
+                        append("• 内容前缀: ${item.content.take(100)}...\n")
+                        append("• 是否包含data URL: ${item.content.startsWith("data:")}\n\n")
+                        append("❌ 可能原因:\n")
+                        append("• Base64格式不正确\n")
+                        append("• 图片数据损坏\n")
+                        append("• 不支持的图片格式")
+                    }
+                }
                 isLoading = false
             } else {
                 // 直接的图片数据
                 Log.d("ClipboardItemCard", "Treating as raw image data...")
                 val imageBytes = item.content.toByteArray(Charsets.ISO_8859_1)
                 bitmap = ImageUtils.bytesToBitmap(imageBytes)
+                if (bitmap == null) {
+                    errorMessage = buildString {
+                        append("🚫 原始数据解码失败\n\n")
+                        append("📋 数据信息:\n")
+                        append("• 原始长度: ${item.content.length}\n")
+                        append("• 字节长度: ${imageBytes.size}\n")
+                        append("• 前16字节: ${imageBytes.take(16).joinToString(" ") { "%02X".format(it) }}\n\n")
+                        append("❌ 可能原因:\n")
+                        append("• 不是有效的图片数据\n")
+                        append("• 字符编码问题\n")
+                        append("• 数据格式不支持")
+                    }
+                }
                 isLoading = false
             }
         } catch (e: Exception) {
@@ -264,40 +298,76 @@ private fun ImageContent(item: ClipboardItem) {
             )
         }
 
+        errorMessage?.startsWith("USE_URL:") == true -> {
+            // 使用URL直接显示图片
+            val imageUrl = errorMessage!!.removePrefix("USE_URL:")
+            Log.d("ClipboardItemCard", "Displaying image from URL: $imageUrl")
+
+            // 使用AsyncImage直接显示图片URL
+            val config = com.clipboardsync.app.ClipboardSyncApplication.getCurrentConfig()
+
+            AsyncImage(
+                model = coil.request.ImageRequest.Builder(LocalContext.current)
+                    .data(imageUrl)
+                    .addHeader(config.authKey, config.authValue)
+                    .crossfade(true)
+                    .build(),
+                contentDescription = "剪切板图片",
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 200.dp)
+                    .clip(RoundedCornerShape(8.dp)),
+                contentScale = ContentScale.Crop
+            )
+        }
+
         else -> {
-            // 显示错误状态
+            // 显示详细错误状态
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(100.dp),
+                    .heightIn(min = 200.dp, max = 400.dp),
                 colors = CardDefaults.cardColors(
                     containerColor = MaterialTheme.colorScheme.errorContainer
                 )
             ) {
-                Box(
-                    modifier = Modifier.fillMaxSize(),
-                    contentAlignment = Alignment.Center
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(12.dp)
                 ) {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally
+                    // 错误标题
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth()
                     ) {
                         Icon(
                             Icons.Default.Image,
                             contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onErrorContainer
+                            tint = MaterialTheme.colorScheme.onErrorContainer,
+                            modifier = Modifier.size(24.dp)
                         )
+                        Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = errorMessage ?: "图片加载失败",
+                            text = "图片加载失败",
                             color = MaterialTheme.colorScheme.onErrorContainer,
-                            style = MaterialTheme.typography.bodySmall,
-                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
-                        )
-                        Text(
-                            text = "内容: ${item.content.take(50)}...",
-                            color = MaterialTheme.colorScheme.onErrorContainer,
-                            style = MaterialTheme.typography.labelSmall
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
                         )
                     }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    // 可滚动的错误详情
+                    Text(
+                        text = errorMessage ?: "未知错误",
+                        color = MaterialTheme.colorScheme.onErrorContainer,
+                        style = MaterialTheme.typography.bodySmall,
+                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .verticalScroll(rememberScrollState())
+                    )
                 }
             }
         }

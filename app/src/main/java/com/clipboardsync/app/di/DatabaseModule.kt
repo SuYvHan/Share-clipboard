@@ -24,7 +24,9 @@ object DatabaseModule {
             context,
             ClipboardDatabase::class.java,
             ClipboardDatabase.DATABASE_NAME
-        ).build()
+        )
+        .addMigrations(ClipboardDatabase.MIGRATION_1_2)
+        .build()
     }
     
     @Provides

@@ -15,6 +15,7 @@ data class ClipboardEntity(
     val fileName: String? = null,
     val fileSize: Long? = null,
     val mimeType: String? = null,
+    val filePath: String? = null,
     val createdAt: String,
     val updatedAt: String,
     val isSynced: Boolean = false,
@@ -30,6 +31,7 @@ fun ClipboardEntity.toDomainModel(): ClipboardItem {
         fileName = fileName,
         fileSize = fileSize,
         mimeType = mimeType,
+        filePath = filePath,
         createdAt = createdAt,
         updatedAt = updatedAt
     )
@@ -44,6 +46,7 @@ fun ClipboardItem.toEntity(isSynced: Boolean = false): ClipboardEntity {
         fileName = fileName,
         fileSize = fileSize,
         mimeType = mimeType,
+        filePath = filePath,
         createdAt = createdAt,
         updatedAt = updatedAt,
         isSynced = isSynced
