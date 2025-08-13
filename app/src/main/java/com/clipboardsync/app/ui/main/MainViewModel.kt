@@ -1,5 +1,6 @@
 package com.clipboardsync.app.ui.main
 
+import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.clipboardsync.app.domain.model.AppConfig
@@ -8,6 +9,7 @@ import com.clipboardsync.app.domain.model.ClipboardType
 import com.clipboardsync.app.domain.repository.ClipboardRepository
 import com.clipboardsync.app.domain.repository.ConfigRepository
 import com.clipboardsync.app.domain.usecase.SaveImageUseCase
+import com.clipboardsync.app.domain.usecase.UploadFileUseCase
 import com.clipboardsync.app.network.websocket.WebSocketClient
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.*
@@ -19,6 +21,7 @@ class MainViewModel @Inject constructor(
     private val clipboardRepository: ClipboardRepository,
     private val configRepository: ConfigRepository,
     private val saveImageUseCase: SaveImageUseCase,
+    private val uploadFileUseCase: UploadFileUseCase,
     private val webSocketClient: WebSocketClient
 ) : ViewModel() {
     
@@ -214,6 +217,38 @@ class MainViewModel @Inject constructor(
             started = SharingStarted.WhileSubscribed(5000),
             initialValue = emptyList()
         )
+    }
+
+    fun handleImageSelected(uri: Uri) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true, message = "正在上传图片...") }
+
+            val result = uploadFileUseCase.uploadImage(uri)
+            result.fold(
+                onSuccess = { message ->
+                    _uiState.update { it.copy(isLoading = false, message = message) }
+                },
+                onFailure = { error ->
+                    _uiState.update { it.copy(isLoading = false, error = "上传失败: ${error.message}") }
+                }
+            )
+        }
+    }
+
+    fun handleFileSelected(uri: Uri) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true, message = "正在上传文件...") }
+
+            val result = uploadFileUseCase.uploadFile(uri)
+            result.fold(
+                onSuccess = { message ->
+                    _uiState.update { it.copy(isLoading = false, message = message) }
+                },
+                onFailure = { error ->
+                    _uiState.update { it.copy(isLoading = false, error = "上传失败: ${error.message}") }
+                }
+            )
+        }
     }
 }
 

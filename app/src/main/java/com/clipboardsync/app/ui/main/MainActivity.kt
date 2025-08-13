@@ -60,6 +60,18 @@ class MainActivity : ComponentActivity() {
             showPermissionDeniedDialog = true
         }
     }
+
+    private val imagePickerLauncher = registerForActivityResult(
+        ActivityResultContracts.GetContent()
+    ) { uri ->
+        uri?.let { viewModel.handleImageSelected(it) }
+    }
+
+    private val filePickerLauncher = registerForActivityResult(
+        ActivityResultContracts.GetContent()
+    ) { uri ->
+        uri?.let { viewModel.handleFileSelected(it) }
+    }
     
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -85,7 +97,9 @@ class MainActivity : ComponentActivity() {
                             },
                             onNavigateToSettings = {
                                 navController.navigate("settings")
-                            }
+                            },
+                            onImageUpload = { imagePickerLauncher.launch("image/*") },
+                            onFileUpload = { filePickerLauncher.launch("*/*") }
                         )
                     }
 
@@ -171,8 +185,10 @@ class MainActivity : ComponentActivity() {
 fun MainScreen(
     viewModel: MainViewModel,
     onCopyToClipboard: (String) -> Unit,
-    onRequestPermissions: () -> Unit,
-    onNavigateToSettings: () -> Unit
+    @Suppress("UNUSED_PARAMETER") onRequestPermissions: () -> Unit,
+    onNavigateToSettings: () -> Unit,
+    onImageUpload: () -> Unit,
+    onFileUpload: () -> Unit
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val filteredItems by viewModel.getFilteredItems().collectAsStateWithLifecycle()
@@ -277,11 +293,10 @@ fun MainScreen(
             )
         },
         floatingActionButton = {
-            FloatingActionButton(
-                onClick = onRequestPermissions
-            ) {
-                Icon(Icons.Default.PlayArrow, contentDescription = "启动服务")
-            }
+            UploadFab(
+                onImageUpload = onImageUpload,
+                onFileUpload = onFileUpload
+            )
         }
     ) { paddingValues ->
         Column(
@@ -348,6 +363,55 @@ fun MainScreen(
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+fun UploadFab(
+    onImageUpload: () -> Unit,
+    onFileUpload: () -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+
+    Column(
+        horizontalAlignment = Alignment.End,
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        // 图片上传按钮
+        if (expanded) {
+            FloatingActionButton(
+                onClick = {
+                    onImageUpload()
+                    expanded = false
+                },
+                containerColor = MaterialTheme.colorScheme.secondary
+            ) {
+                Icon(Icons.Default.Image, contentDescription = "上传图片")
+            }
+        }
+
+        // 文件上传按钮
+        if (expanded) {
+            FloatingActionButton(
+                onClick = {
+                    onFileUpload()
+                    expanded = false
+                },
+                containerColor = MaterialTheme.colorScheme.tertiary
+            ) {
+                Icon(Icons.Default.Description, contentDescription = "上传文件")
+            }
+        }
+
+        // 主按钮
+        FloatingActionButton(
+            onClick = { expanded = !expanded }
+        ) {
+            Icon(
+                imageVector = if (expanded) Icons.Default.Close else Icons.Default.Add,
+                contentDescription = if (expanded) "关闭" else "上传"
+            )
         }
     }
 }

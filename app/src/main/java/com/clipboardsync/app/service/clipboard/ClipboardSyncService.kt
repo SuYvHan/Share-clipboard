@@ -217,6 +217,27 @@ class ClipboardSyncService : Service() {
         }
     }
 
+    private fun setTextToClipboard(text: String) {
+        try {
+            // 临时禁用剪切板监听，避免触发自己的处理逻辑
+            isProcessingClipboard = true
+
+            val clipData = ClipData.newPlainText("Synced Text", text)
+            clipboardManager.setPrimaryClip(clipData)
+
+            Log.d(tag, "Successfully set text to clipboard: ${text.take(50)}...")
+        } catch (e: Exception) {
+            Log.e(tag, "Error setting text to clipboard", e)
+        } finally {
+            // 延迟重新启用剪切板监听，避免立即触发
+            serviceScope.launch {
+                kotlinx.coroutines.delay(1000) // 等待1秒
+                isProcessingClipboard = false
+                Log.d(tag, "Re-enabled clipboard monitoring after sync")
+            }
+        }
+    }
+
     private fun uploadToHttpServer(clipboardItem: ClipboardItem, config: AppConfig) {
         serviceScope.launch {
             try {
@@ -283,7 +304,9 @@ class ClipboardSyncService : Service() {
         val outputStream = ByteArrayOutputStream()
         bitmap.compress(Bitmap.CompressFormat.PNG, 100, outputStream)
         val byteArray = outputStream.toByteArray()
-        return Base64.encodeToString(byteArray, Base64.DEFAULT)
+        val base64 = Base64.encodeToString(byteArray, Base64.NO_WRAP)
+        Log.d(tag, "Encoded bitmap to base64, length: ${base64.length}")
+        return base64
     }
     
     private fun getContentPreview(item: ClipboardItem): String {
@@ -380,8 +403,23 @@ class ClipboardSyncService : Service() {
                     val config = configRepository.getConfig().first()
                     if (item.deviceId != config.deviceId) {
                         // 保存来自其他设备的同步内容为剪切板块
+                        Log.d(tag, "Received sync from device: ${item.deviceId}, type: ${item.type}")
+
+                        // 如果是文本类型，直接设置到系统剪切板
+                        if (item.type == com.clipboardsync.app.domain.model.ClipboardType.text) {
+                            Log.d(tag, "Setting text content to system clipboard: ${item.content.take(50)}...")
+                            setTextToClipboard(item.content)
+                            updateNotification("已同步文本到剪切板: ${getContentPreview(item)}")
+                        } else {
+                            // 非文本内容只保存，不设置到剪切板
+                            if (item.type == com.clipboardsync.app.domain.model.ClipboardType.image) {
+                                Log.d(tag, "Image content length: ${item.content.length}")
+                                Log.d(tag, "Image content prefix: ${item.content.take(100)}")
+                            }
+                            updateNotification("收到同步: ${getContentPreview(item)}")
+                        }
+
                         clipboardRepository.insertItem(item, isSynced = true)
-                        updateNotification("收到同步: ${getContentPreview(item)}")
                         Log.d(tag, "Received and saved sync from device: ${item.deviceId}")
                     } else {
                         Log.d(tag, "Ignored sync from own device: ${item.deviceId}")

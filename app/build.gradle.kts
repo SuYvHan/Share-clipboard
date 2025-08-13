@@ -22,6 +22,11 @@ android {
     }
 
     buildTypes {
+        debug {
+            // 禁用调试版本的符号剥离以避免警告
+            isDebuggable = true
+            isJniDebuggable = true
+        }
         release {
             isMinifyEnabled = false
             proguardFiles(
@@ -47,9 +52,10 @@ android {
     kapt {
         correctErrorTypes = true
         useBuildCache = true
-        arguments {
-            arg("dagger.fastInit", "enabled")
-            arg("dagger.hilt.android.internal.disableAndroidSuperclassValidation", "true")
+        // 移除重复的参数配置，使用gradle.properties中的配置
+        javacOptions {
+            // 增加Java编译器的堆内存
+            option("-Xmx2g")
         }
     }
     buildFeatures {
@@ -58,6 +64,10 @@ android {
     packaging {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
+        }
+        jniLibs {
+            // 保持AndroidX Graphics库的原生库不被剥离
+            keepDebugSymbols += "**/libandroidx.graphics.path.so"
         }
     }
 }
