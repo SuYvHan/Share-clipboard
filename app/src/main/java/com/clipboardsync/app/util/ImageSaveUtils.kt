@@ -33,42 +33,67 @@ object ImageSaveUtils {
     ): Result<String> {
         return withContext(Dispatchers.IO) {
             try {
+                Log.d(TAG, "开始保存图片到相册，Android版本: ${Build.VERSION.SDK_INT}")
+
                 val contentResolver = context.contentResolver
                 val imageCollection = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                     MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
                 } else {
                     MediaStore.Images.Media.EXTERNAL_CONTENT_URI
                 }
-                
+
                 val contentValues = ContentValues().apply {
                     put(MediaStore.Images.Media.DISPLAY_NAME, fileName)
                     put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
+
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        // Android 10+ 使用分区存储
                         put(MediaStore.Images.Media.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/ClipboardSync")
                         put(MediaStore.Images.Media.IS_PENDING, 1)
+
+                        // Android 12+ 特殊处理
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                            // 确保文件可以被其他应用访问
+                            put(MediaStore.Images.Media.IS_PENDING, 1)
+                        }
+                    } else {
+                        // Android 9及以下使用传统路径
+                        val picturesDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES)
+                        val clipboardDir = File(picturesDir, "ClipboardSync")
+                        if (!clipboardDir.exists()) {
+                            clipboardDir.mkdirs()
+                        }
+                        put(MediaStore.Images.Media.DATA, File(clipboardDir, fileName).absolutePath)
                     }
                 }
-                
+
+                Log.d(TAG, "创建MediaStore条目...")
                 val imageUri = contentResolver.insert(imageCollection, contentValues)
-                
+
                 if (imageUri != null) {
+                    Log.d(TAG, "成功创建MediaStore条目: $imageUri")
+
                     contentResolver.openOutputStream(imageUri)?.use { outputStream ->
-                        bitmap.compress(Bitmap.CompressFormat.JPEG, 90, outputStream)
+                        val success = bitmap.compress(Bitmap.CompressFormat.JPEG, 90, outputStream)
+                        Log.d(TAG, "图片压缩结果: $success")
                     }
-                    
+
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        // 完成写入，移除pending状态
                         contentValues.clear()
                         contentValues.put(MediaStore.Images.Media.IS_PENDING, 0)
-                        contentResolver.update(imageUri, contentValues, null, null)
+                        val updateResult = contentResolver.update(imageUri, contentValues, null, null)
+                        Log.d(TAG, "更新pending状态结果: $updateResult")
                     }
-                    
-                    Log.d(TAG, "Image saved to gallery successfully: $imageUri")
+
+                    Log.d(TAG, "图片保存成功: $imageUri")
                     Result.success("图片已保存到相册")
                 } else {
+                    Log.e(TAG, "无法创建MediaStore条目")
                     Result.failure(Exception("无法创建图片文件"))
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "Error saving bitmap to gallery", e)
+                Log.e(TAG, "保存图片到相册失败", e)
                 Result.failure(e)
             }
         }

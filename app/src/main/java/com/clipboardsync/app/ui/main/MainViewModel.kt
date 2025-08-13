@@ -3,6 +3,7 @@ package com.clipboardsync.app.ui.main
 import android.content.Context
 import android.graphics.Bitmap
 import android.net.Uri
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import com.clipboardsync.app.util.ImageSaveUtils
 import androidx.lifecycle.viewModelScope
@@ -13,10 +14,13 @@ import com.clipboardsync.app.domain.repository.ClipboardRepository
 import com.clipboardsync.app.domain.repository.ConfigRepository
 import com.clipboardsync.app.domain.usecase.SaveImageUseCase
 import com.clipboardsync.app.domain.usecase.UploadFileUseCase
+import com.clipboardsync.app.network.http.ClipboardHttpService
 import com.clipboardsync.app.network.websocket.WebSocketClient
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import java.text.SimpleDateFormat
+import java.util.*
 import javax.inject.Inject
 
 @HiltViewModel
@@ -25,7 +29,8 @@ class MainViewModel @Inject constructor(
     private val configRepository: ConfigRepository,
     private val saveImageUseCase: SaveImageUseCase,
     private val uploadFileUseCase: UploadFileUseCase,
-    private val webSocketClient: WebSocketClient
+    private val webSocketClient: WebSocketClient,
+    private val clipboardHttpService: ClipboardHttpService
 ) : ViewModel() {
     
     private val _uiState = MutableStateFlow(MainUiState())
@@ -264,6 +269,87 @@ class MainViewModel @Inject constructor(
                 )
             } catch (e: Exception) {
                 _uiState.update { it.copy(isLoading = false, error = "保存失败: ${e.message}") }
+            }
+        }
+    }
+
+    fun uploadText(text: String) {
+        if (text.isBlank()) return
+
+        viewModelScope.launch {
+            try {
+                _uiState.update { it.copy(isLoading = true, message = "正在上传文本...") }
+
+                val config = configRepository.getConfig().first()
+                val now = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.getDefault()).format(Date())
+
+                val clipboardItem = ClipboardItem(
+                    id = UUID.randomUUID().toString(),
+                    type = ClipboardType.text,
+                    content = text.trim(),
+                    deviceId = config.deviceId,
+                    mimeType = "text/plain",
+                    createdAt = now,
+                    updatedAt = now
+                )
+
+                Log.d("MainViewModel", "Uploading text via WebSocket and HTTP: ${text.take(50)}...")
+
+                var syncSuccess = false
+
+                // 1. 通过WebSocket发送到服务器（和剪切板监测一样）
+                if (webSocketClient.isConnected()) {
+                    webSocketClient.syncClipboardItem(clipboardItem)
+                    syncSuccess = true
+                    Log.d("MainViewModel", "Text sent via WebSocket successfully")
+                } else {
+                    Log.w("MainViewModel", "WebSocket not connected, will try HTTP only")
+                }
+
+                // 2. 同时通过HTTP上传到服务器（和剪切板监测一样）
+                uploadToHttpServer(clipboardItem, config)
+
+                // 3. 不保存到本地数据库（和剪切板监测一样，直接发送不保存）
+
+                _uiState.update {
+                    it.copy(
+                        isLoading = false,
+                        message = if (syncSuccess) "文本上传成功" else "文本上传中..."
+                    )
+                }
+
+                Log.d("MainViewModel", "Text upload completed: ${text.take(50)}...")
+
+            } catch (e: Exception) {
+                Log.e("MainViewModel", "Error uploading text", e)
+                _uiState.update {
+                    it.copy(
+                        isLoading = false,
+                        error = "文本上传失败: ${e.message}"
+                    )
+                }
+            }
+        }
+    }
+
+    /**
+     * 通过HTTP上传到服务器（和剪切板监测使用相同的方法）
+     */
+    private fun uploadToHttpServer(clipboardItem: ClipboardItem, config: AppConfig) {
+        viewModelScope.launch {
+            try {
+                Log.d("MainViewModel", "Uploading clipboard item to HTTP server: ${config.httpUrl}")
+                val result = clipboardHttpService.uploadClipboardContent(config, clipboardItem)
+                result.fold(
+                    onSuccess = { response ->
+                        Log.i("MainViewModel", "HTTP upload successful: $response")
+                    },
+                    onFailure = { error ->
+                        Log.w("MainViewModel", "HTTP upload failed: ${error.message}")
+                    }
+                )
+            } catch (e: Exception) {
+                Log.e("MainViewModel", "HTTP upload error", e)
             }
         }
     }

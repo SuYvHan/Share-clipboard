@@ -21,6 +21,7 @@ import com.clipboardsync.app.domain.repository.ConfigRepository
 import com.clipboardsync.app.network.http.ClipboardHttpService
 import com.clipboardsync.app.network.websocket.WebSocketClient
 import com.clipboardsync.app.ui.main.MainActivity
+import com.clipboardsync.app.util.NotificationHelper
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.first
@@ -45,13 +46,12 @@ class ClipboardSyncService : Service() {
     lateinit var clipboardHttpService: ClipboardHttpService
     
     private lateinit var clipboardManager: ClipboardManager
+    private lateinit var notificationHelper: NotificationHelper
     private var lastClipboardContent: String? = null
     private var isProcessingClipboard = false
     private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     
     private val tag = "ClipboardSyncService"
-    private val notificationId = 1001
-    private val channelId = "clipboard_sync_channel"
     
     companion object {
         const val ACTION_START_SERVICE = "START_SERVICE"
@@ -79,11 +79,30 @@ class ClipboardSyncService : Service() {
     override fun onCreate() {
         super.onCreate()
         Log.d(tag, "Service created")
-        
+
         clipboardManager = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-        createNotificationChannel()
-        startForeground(notificationId, createNotification("剪切板同步服务运行中"))
-        
+        notificationHelper = NotificationHelper(this)
+
+        // 异步初始化通知，支持重试
+        serviceScope.launch {
+            val success = notificationHelper.createNotificationChannelWithRetry()
+            if (success) {
+                val notification = notificationHelper.createForegroundNotification("剪切板同步服务运行中")
+                if (notification != null) {
+                    try {
+                        startForeground(notificationHelper.getNotificationId(), notification)
+                        Log.i(tag, "Foreground service started successfully")
+                    } catch (e: Exception) {
+                        Log.e(tag, "Failed to start foreground service", e)
+                    }
+                } else {
+                    Log.w(tag, "Failed to create notification, service will run without foreground notification")
+                }
+            } else {
+                Log.w(tag, "Notification channel creation failed, service will run without foreground notification")
+            }
+        }
+
         setupClipboardListener()
         connectWebSocket()
     }
@@ -111,42 +130,29 @@ class ClipboardSyncService : Service() {
         serviceScope.cancel()
     }
     
-    private fun createNotificationChannel() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
-                channelId,
-                "剪切板同步服务",
-                NotificationManager.IMPORTANCE_LOW
-            ).apply {
-                description = "保持剪切板同步服务运行"
-                setShowBadge(false)
-            }
-            
-            val notificationManager = getSystemService(NotificationManager::class.java)
-            notificationManager.createNotificationChannel(channel)
+    private fun updateNotification(content: String) {
+        if (::notificationHelper.isInitialized && notificationHelper.isNotificationEnabled()) {
+            notificationHelper.updateNotification(content)
         }
     }
-    
-    private fun createNotification(content: String): Notification {
-        val intent = Intent(this, MainActivity::class.java)
-        val pendingIntent = PendingIntent.getActivity(
-            this, 0, intent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-        
-        return NotificationCompat.Builder(this, channelId)
-            .setContentTitle("剪切板同步")
-            .setContentText(content)
-            .setSmallIcon(R.drawable.ic_notification)
-            .setContentIntent(pendingIntent)
-            .setOngoing(true)
-            .setSilent(true)
-            .build()
-    }
-    
-    private fun updateNotification(content: String) {
-        val notificationManager = getSystemService(NotificationManager::class.java)
-        notificationManager.notify(notificationId, createNotification(content))
+
+    /**
+     * 检查应用是否在前台（Android 12+需要）
+     */
+    private fun isAppInForeground(): Boolean {
+        return try {
+            val activityManager = getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+            val runningAppProcesses = activityManager.runningAppProcesses
+
+            runningAppProcesses?.any { processInfo ->
+                processInfo.processName == packageName &&
+                processInfo.importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND
+            } ?: false
+        } catch (e: Exception) {
+            Log.w(tag, "Error checking foreground status: ${e.message}")
+            // 如果检查失败，假设在前台以避免阻塞功能
+            true
+        }
     }
     
     private fun setupClipboardListener() {
@@ -166,7 +172,25 @@ class ClipboardSyncService : Service() {
             val config = configRepository.getConfig().first()
             if (!config.autoSync) return
 
-            val clipData = clipboardManager.primaryClip
+            // Android 12+ 剪切板访问限制检查
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                // 检查应用是否在前台或有剪切板访问权限
+                if (!isAppInForeground()) {
+                    Log.d(tag, "App not in foreground, skipping clipboard access (Android 12+)")
+                    return
+                }
+            }
+
+            val clipData = try {
+                clipboardManager.primaryClip
+            } catch (e: SecurityException) {
+                Log.w(tag, "Security exception accessing clipboard (Android 12+): ${e.message}")
+                return
+            } catch (e: Exception) {
+                Log.e(tag, "Error accessing clipboard: ${e.message}")
+                return
+            }
+
             if (clipData == null || clipData.itemCount == 0) return
 
             val item = clipData.getItemAt(0)
@@ -271,42 +295,236 @@ class ClipboardSyncService : Service() {
     
     private suspend fun createImageClipboardItem(uri: Uri, config: AppConfig): ClipboardItem? {
         return try {
-            val bitmap = loadBitmapFromUri(uri) ?: return null
+            Log.d(tag, "Attempting to create image clipboard item from URI: $uri")
+
+            val bitmap = loadBitmapFromUri(uri)
+            if (bitmap == null) {
+                Log.w(tag, "Failed to load bitmap, creating text fallback")
+                return createTextFallbackForImage(uri, config)
+            }
+
             val base64 = bitmapToBase64(bitmap)
+            if (base64.isEmpty()) {
+                Log.w(tag, "Failed to convert bitmap to base64, creating text fallback")
+                bitmap.recycle() // 释放内存
+                return createTextFallbackForImage(uri, config)
+            }
+
             val now = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.getDefault()).format(Date())
-            
-            ClipboardItem(
+
+            val imageItem = ClipboardItem(
                 id = UUID.randomUUID().toString(),
                 type = ClipboardType.image,
                 content = base64,
                 deviceId = config.deviceId,
-                mimeType = "image/png",
+                mimeType = "image/jpeg", // 改为JPEG，因为我们使用JPEG压缩
+                createdAt = now,
+                updatedAt = now
+            )
+
+            Log.d(tag, "Successfully created image clipboard item")
+            imageItem
+
+        } catch (e: OutOfMemoryError) {
+            Log.e(tag, "Out of memory creating image clipboard item, using text fallback", e)
+            createTextFallbackForImage(uri, config)
+        } catch (e: SecurityException) {
+            Log.e(tag, "Security exception creating image clipboard item (Android 12+), using text fallback", e)
+            createTextFallbackForImage(uri, config)
+        } catch (e: Exception) {
+            Log.e(tag, "Error creating image clipboard item, using text fallback", e)
+            createTextFallbackForImage(uri, config)
+        }
+    }
+
+    /**
+     * 创建图片的文本兜底方案
+     */
+    private fun createTextFallbackForImage(uri: Uri, config: AppConfig): ClipboardItem? {
+        return try {
+            val now = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.getDefault()).format(Date())
+            val fallbackText = "📷 图片文件 (Android 12兼容模式)\n" +
+                    "URI: $uri\n" +
+                    "时间: ${SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())}\n" +
+                    "注意: 由于系统限制，图片以文本形式同步"
+
+            Log.d(tag, "Created text fallback for image: $fallbackText")
+
+            ClipboardItem(
+                id = UUID.randomUUID().toString(),
+                type = ClipboardType.text,
+                content = fallbackText,
+                deviceId = config.deviceId,
+                mimeType = "text/plain",
                 createdAt = now,
                 updatedAt = now
             )
         } catch (e: Exception) {
-            Log.e(tag, "Error creating image clipboard item", e)
+            Log.e(tag, "Error creating text fallback for image", e)
             null
         }
     }
-    
+
     private fun loadBitmapFromUri(uri: Uri): Bitmap? {
         return try {
+            Log.d(tag, "Loading bitmap from URI: $uri")
+
+            // Android 12+ 需要特殊处理URI访问
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                // 检查URI权限
+                try {
+                    contentResolver.takePersistableUriPermission(
+                        uri,
+                        Intent.FLAG_GRANT_READ_URI_PERMISSION
+                    )
+                } catch (e: SecurityException) {
+                    Log.w(tag, "Cannot take persistable URI permission (Android 12+): ${e.message}")
+                    // 继续尝试读取，可能是临时权限
+                } catch (e: UnsupportedOperationException) {
+                    Log.w(tag, "URI does not support persistable permissions: ${e.message}")
+                    // 某些URI不支持持久权限，继续尝试
+                }
+            }
+
             val inputStream = contentResolver.openInputStream(uri)
-            android.graphics.BitmapFactory.decodeStream(inputStream)
+            if (inputStream == null) {
+                Log.e(tag, "Cannot open input stream for URI: $uri")
+                return null
+            }
+
+            // 使用BitmapFactory.Options进行内存优化
+            val options = android.graphics.BitmapFactory.Options().apply {
+                // 首先只获取图片尺寸
+                inJustDecodeBounds = true
+            }
+
+            android.graphics.BitmapFactory.decodeStream(inputStream, null, options)
+            inputStream.close()
+
+            // Android 12+ 内存限制：如果图片太大，进行采样
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                val maxSize = 2048
+                if (options.outWidth > maxSize || options.outHeight > maxSize) {
+                    options.inSampleSize = calculateInSampleSize(options, maxSize, maxSize)
+                    Log.d(tag, "Using sample size: ${options.inSampleSize} for large image")
+                }
+            }
+
+            // 实际解码图片
+            options.inJustDecodeBounds = false
+            val newInputStream = contentResolver.openInputStream(uri)
+            val bitmap = android.graphics.BitmapFactory.decodeStream(newInputStream, null, options)
+            newInputStream?.close()
+
+            if (bitmap != null) {
+                Log.d(tag, "Successfully loaded bitmap: ${bitmap.width}x${bitmap.height}")
+            } else {
+                Log.w(tag, "Failed to decode bitmap from URI")
+            }
+
+            bitmap
+        } catch (e: SecurityException) {
+            Log.e(tag, "Security exception loading bitmap from URI (Android 12+): ${e.message}")
+            null
+        } catch (e: OutOfMemoryError) {
+            Log.e(tag, "Out of memory loading bitmap from URI: ${e.message}")
+            null
         } catch (e: Exception) {
-            Log.e(tag, "Error loading bitmap from URI", e)
+            Log.e(tag, "Error loading bitmap from URI: ${e.message}")
             null
         }
     }
-    
+
+    /**
+     * 计算图片采样大小以减少内存使用
+     */
+    private fun calculateInSampleSize(
+        options: android.graphics.BitmapFactory.Options,
+        reqWidth: Int,
+        reqHeight: Int
+    ): Int {
+        val height = options.outHeight
+        val width = options.outWidth
+        var inSampleSize = 1
+
+        if (height > reqHeight || width > reqWidth) {
+            val halfHeight = height / 2
+            val halfWidth = width / 2
+
+            while ((halfHeight / inSampleSize) >= reqHeight && (halfWidth / inSampleSize) >= reqWidth) {
+                inSampleSize *= 2
+            }
+        }
+
+        return inSampleSize
+    }
+
     private fun bitmapToBase64(bitmap: Bitmap): String {
-        val outputStream = ByteArrayOutputStream()
-        bitmap.compress(Bitmap.CompressFormat.PNG, 100, outputStream)
-        val byteArray = outputStream.toByteArray()
-        val base64 = Base64.encodeToString(byteArray, Base64.NO_WRAP)
-        Log.d(tag, "Encoded bitmap to base64, length: ${base64.length}")
-        return base64
+        return try {
+            Log.d(tag, "Converting bitmap to base64: ${bitmap.width}x${bitmap.height}")
+
+            // Android 12+ 内存优化：限制图片大小
+            val processedBitmap = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                // 如果图片太大，进行压缩
+                val maxSize = 1024 // 减小最大尺寸以避免内存问题
+                if (bitmap.width > maxSize || bitmap.height > maxSize) {
+                    val scale = minOf(
+                        maxSize.toFloat() / bitmap.width,
+                        maxSize.toFloat() / bitmap.height
+                    )
+                    val newWidth = (bitmap.width * scale).toInt()
+                    val newHeight = (bitmap.height * scale).toInt()
+
+                    Log.d(tag, "Resizing bitmap from ${bitmap.width}x${bitmap.height} to ${newWidth}x${newHeight}")
+
+                    try {
+                        Bitmap.createScaledBitmap(bitmap, newWidth, newHeight, true)
+                    } catch (e: OutOfMemoryError) {
+                        Log.e(tag, "Out of memory resizing bitmap, using original")
+                        bitmap
+                    }
+                } else {
+                    bitmap
+                }
+            } else {
+                bitmap
+            }
+
+            val outputStream = ByteArrayOutputStream()
+            // 使用JPEG格式和较低质量以减少内存使用
+            val quality = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) 60 else 80 // Android 12+使用更低质量
+            val success = processedBitmap.compress(Bitmap.CompressFormat.JPEG, quality, outputStream)
+
+            if (!success) {
+                Log.e(tag, "Failed to compress bitmap")
+                return ""
+            }
+
+            val byteArray = outputStream.toByteArray()
+            outputStream.close()
+
+            // 如果创建了新的bitmap，释放内存
+            if (processedBitmap != bitmap) {
+                processedBitmap.recycle()
+            }
+
+            // Android 12+ 检查最终大小
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && byteArray.size > 5 * 1024 * 1024) { // 5MB限制
+                Log.w(tag, "Image too large after compression: ${byteArray.size} bytes, skipping")
+                return ""
+            }
+
+            val base64 = Base64.encodeToString(byteArray, Base64.NO_WRAP)
+            Log.d(tag, "Base64 conversion completed, size: ${byteArray.size} bytes")
+
+            base64
+        } catch (e: OutOfMemoryError) {
+            Log.e(tag, "Out of memory converting bitmap to base64", e)
+            ""
+        } catch (e: Exception) {
+            Log.e(tag, "Error converting bitmap to base64", e)
+            ""
+        }
     }
     
     private fun getContentPreview(item: ClipboardItem): String {

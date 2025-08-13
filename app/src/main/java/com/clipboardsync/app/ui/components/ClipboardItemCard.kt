@@ -35,7 +35,25 @@ fun ClipboardItemCard(
     onSaveImage: (ClipboardItem) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    // 使用remember优化性能，避免不必要的重组
     var showMenu by remember { mutableStateOf(false) }
+
+    // 预计算格式化时间，避免每次重组都计算
+    val formattedTime = remember(item.createdAt) {
+        try {
+            SimpleDateFormat("MM-dd HH:mm", Locale.getDefault()).format(item.createdAt)
+        } catch (e: Exception) {
+            "未知时间"
+        }
+    }
+
+    // 预计算内容预览，避免每次重组都截取
+    val contentPreview = remember(item.content) {
+        when {
+            item.content.length > 100 -> item.content.take(100) + "..."
+            else -> item.content
+        }
+    }
     
     Card(
         modifier = modifier.fillMaxWidth(),
@@ -127,7 +145,7 @@ fun ClipboardItemCard(
             when (item.type) {
                 ClipboardType.text -> {
                     Text(
-                        text = item.content,
+                        text = contentPreview,
                         style = MaterialTheme.typography.bodyMedium,
                         maxLines = 5,
                         overflow = TextOverflow.Ellipsis
@@ -152,7 +170,7 @@ fun ClipboardItemCard(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = formatDateTime(item.createdAt),
+                    text = formattedTime,
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -171,11 +189,12 @@ fun ClipboardItemCard(
 
 @Composable
 private fun ImageContent(item: ClipboardItem) {
-    var bitmap by remember { mutableStateOf<Bitmap?>(null) }
-    var isLoading by remember { mutableStateOf(true) }
-    var errorMessage by remember { mutableStateOf<String?>(null) }
+    // 使用item.id和content作为key，确保状态正确管理
+    var bitmap by remember(item.id, item.content) { mutableStateOf<Bitmap?>(null) }
+    var isLoading by remember(item.id, item.content) { mutableStateOf(true) }
+    var errorMessage by remember(item.id, item.content) { mutableStateOf<String?>(null) }
 
-    LaunchedEffect(item.content) {
+    LaunchedEffect(item.id, item.content) {
         Log.d("ClipboardItemCard", "Loading image for item: ${item.id}, content: ${item.content}")
 
         try {

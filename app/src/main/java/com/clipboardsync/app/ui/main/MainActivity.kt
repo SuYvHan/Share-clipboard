@@ -47,6 +47,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var clipboardManager: ClipboardManager
 
     private var showPermissionDialog by mutableStateOf(false)
+    private var showTextUploadDialog by mutableStateOf(false)
     private var showPermissionDeniedDialog by mutableStateOf(false)
 
     private val permissionLauncher = registerForActivityResult(
@@ -99,7 +100,8 @@ class MainActivity : ComponentActivity() {
                                 navController.navigate("settings")
                             },
                             onImageUpload = { imagePickerLauncher.launch("image/*") },
-                            onFileUpload = { filePickerLauncher.launch("*/*") }
+                            onFileUpload = { filePickerLauncher.launch("*/*") },
+                            onTextUpload = { showTextUploadDialog = true }
                         )
                     }
 
@@ -140,6 +142,17 @@ class MainActivity : ComponentActivity() {
                         },
                         onDismiss = {
                             showPermissionDeniedDialog = false
+                        }
+                    )
+                }
+
+                // 文本上传对话框
+                if (showTextUploadDialog) {
+                    TextUploadDialog(
+                        onDismiss = { showTextUploadDialog = false },
+                        onUpload = { text ->
+                            viewModel.uploadText(text)
+                            showTextUploadDialog = false
                         }
                     )
                 }
@@ -188,7 +201,8 @@ fun MainScreen(
     @Suppress("UNUSED_PARAMETER") onRequestPermissions: () -> Unit,
     onNavigateToSettings: () -> Unit,
     onImageUpload: () -> Unit,
-    onFileUpload: () -> Unit
+    onFileUpload: () -> Unit,
+    onTextUpload: () -> Unit
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val filteredItems by viewModel.getFilteredItems().collectAsStateWithLifecycle()
@@ -295,7 +309,8 @@ fun MainScreen(
         floatingActionButton = {
             UploadFab(
                 onImageUpload = onImageUpload,
-                onFileUpload = onFileUpload
+                onFileUpload = onFileUpload,
+                onTextUpload = onTextUpload
             )
         }
     ) { paddingValues ->
@@ -333,7 +348,10 @@ fun MainScreen(
                 contentPadding = PaddingValues(16.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                items(filteredItems) { item ->
+                items(
+                    items = filteredItems,
+                    key = { item -> item.id }  // 添加key提升滚动性能
+                ) { item ->
                     val context = LocalContext.current
                     ClipboardItemCard(
                         item = item,
@@ -371,7 +389,8 @@ fun MainScreen(
 @Composable
 fun UploadFab(
     onImageUpload: () -> Unit,
-    onFileUpload: () -> Unit
+    onFileUpload: () -> Unit,
+    onTextUpload: () -> Unit = {}
 ) {
     var expanded by remember { mutableStateOf(false) }
 
@@ -379,6 +398,19 @@ fun UploadFab(
         horizontalAlignment = Alignment.End,
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
+        // 文本上传按钮
+        if (expanded) {
+            FloatingActionButton(
+                onClick = {
+                    onTextUpload()
+                    expanded = false
+                },
+                containerColor = MaterialTheme.colorScheme.primary
+            ) {
+                Icon(Icons.Default.Edit, contentDescription = "上传文本")
+            }
+        }
+
         // 图片上传按钮
         if (expanded) {
             FloatingActionButton(
@@ -415,4 +447,68 @@ fun UploadFab(
             )
         }
     }
+}
+
+@Composable
+fun TextUploadDialog(
+    onDismiss: () -> Unit,
+    onUpload: (String) -> Unit
+) {
+    var text by remember { mutableStateOf("") }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(
+                text = "上传文本",
+                style = MaterialTheme.typography.headlineSmall
+            )
+        },
+        text = {
+            Column {
+                Text(
+                    text = "输入要上传到剪切板服务器的文本内容：",
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.padding(bottom = 16.dp)
+                )
+
+                OutlinedTextField(
+                    value = text,
+                    onValueChange = { text = it },
+                    label = { Text("文本内容") },
+                    placeholder = { Text("请输入文本...") },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 120.dp, max = 200.dp),
+                    maxLines = 8,
+                    singleLine = false
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Text(
+                    text = "字符数: ${text.length}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    if (text.isNotBlank()) {
+                        onUpload(text.trim())
+                    }
+                },
+                enabled = text.isNotBlank()
+            ) {
+                Text("上传")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("取消")
+            }
+        }
+    )
 }
