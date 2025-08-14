@@ -2,8 +2,12 @@ package com.clipboardsync.app.util
 
 import android.Manifest
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
+import android.os.PowerManager
+import android.provider.Settings
 import androidx.core.content.ContextCompat
 
 object PermissionUtils {
@@ -426,5 +430,315 @@ object PermissionUtils {
      */
     fun checkHarmonyPermissionStatus(context: Context): String {
         return getDetailedPermissionStatus(context)
+    }
+
+    /**
+     * 检查电池优化权限
+     */
+    fun isBatteryOptimizationIgnored(context: Context): Boolean {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            val powerManager = context.getSystemService(Context.POWER_SERVICE) as PowerManager
+            powerManager.isIgnoringBatteryOptimizations(context.packageName)
+        } else {
+            true // Android 6.0以下没有电池优化
+        }
+    }
+
+    /**
+     * 检查是否可以请求忽略电池优化
+     */
+    fun canRequestBatteryOptimization(context: Context): Boolean {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            try {
+                val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                    data = Uri.parse("package:${context.packageName}")
+                }
+                intent.resolveActivity(context.packageManager) != null
+            } catch (e: Exception) {
+                android.util.Log.w("PermissionUtils", "检查电池优化权限失败: ${e.message}")
+                false
+            }
+        } else {
+            false
+        }
+    }
+
+    /**
+     * 请求忽略电池优化
+     */
+    fun requestIgnoreBatteryOptimization(context: Context): Intent? {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && canRequestBatteryOptimization(context)) {
+            Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                data = Uri.parse("package:${context.packageName}")
+            }
+        } else {
+            null
+        }
+    }
+
+    /**
+     * 检查自启动权限（主要针对国产手机）
+     */
+    fun checkAutoStartPermission(context: Context): AutoStartStatus {
+        val manufacturer = Build.MANUFACTURER.lowercase()
+        val brand = Build.BRAND.lowercase()
+
+        android.util.Log.d("PermissionUtils", "检查自启动权限 - 制造商: $manufacturer, 品牌: $brand")
+
+        return when {
+            manufacturer.contains("xiaomi") || brand.contains("xiaomi") -> {
+                checkXiaomiAutoStart(context)
+            }
+            manufacturer.contains("huawei") || brand.contains("huawei") || brand.contains("honor") -> {
+                checkHuaweiAutoStart(context)
+            }
+            manufacturer.contains("oppo") || brand.contains("oppo") -> {
+                checkOppoAutoStart(context)
+            }
+            manufacturer.contains("vivo") || brand.contains("vivo") -> {
+                checkVivoAutoStart(context)
+            }
+            manufacturer.contains("meizu") || brand.contains("meizu") -> {
+                checkMeizuAutoStart(context)
+            }
+            manufacturer.contains("samsung") || brand.contains("samsung") -> {
+                checkSamsungAutoStart(context)
+            }
+            else -> {
+                AutoStartStatus.UNKNOWN
+            }
+        }
+    }
+
+    /**
+     * 自启动权限状态
+     */
+    enum class AutoStartStatus {
+        ENABLED,    // 已启用
+        DISABLED,   // 已禁用
+        UNKNOWN,    // 无法检测或不支持
+        NO_PERMISSION // 无权限检测
+    }
+
+    /**
+     * 检查小米自启动权限
+     */
+    private fun checkXiaomiAutoStart(context: Context): AutoStartStatus {
+        return try {
+            val intent = Intent().apply {
+                component = android.content.ComponentName(
+                    "com.miui.securitycenter",
+                    "com.miui.permcenter.autostart.AutoStartManagementActivity"
+                )
+            }
+            if (intent.resolveActivity(context.packageManager) != null) {
+                AutoStartStatus.UNKNOWN // 可以打开设置，但无法检测状态
+            } else {
+                AutoStartStatus.UNKNOWN
+            }
+        } catch (e: Exception) {
+            android.util.Log.w("PermissionUtils", "检查小米自启动权限失败: ${e.message}")
+            AutoStartStatus.UNKNOWN
+        }
+    }
+
+    /**
+     * 检查华为自启动权限
+     */
+    private fun checkHuaweiAutoStart(context: Context): AutoStartStatus {
+        return try {
+            val intent = Intent().apply {
+                component = android.content.ComponentName(
+                    "com.huawei.systemmanager",
+                    "com.huawei.systemmanager.startupmgr.ui.StartupNormalAppListActivity"
+                )
+            }
+            if (intent.resolveActivity(context.packageManager) != null) {
+                AutoStartStatus.UNKNOWN
+            } else {
+                AutoStartStatus.UNKNOWN
+            }
+        } catch (e: Exception) {
+            android.util.Log.w("PermissionUtils", "检查华为自启动权限失败: ${e.message}")
+            AutoStartStatus.UNKNOWN
+        }
+    }
+
+    /**
+     * 检查OPPO自启动权限
+     */
+    private fun checkOppoAutoStart(context: Context): AutoStartStatus {
+        return try {
+            val intent = Intent().apply {
+                component = android.content.ComponentName(
+                    "com.coloros.safecenter",
+                    "com.coloros.safecenter.permission.startup.StartupAppListActivity"
+                )
+            }
+            if (intent.resolveActivity(context.packageManager) != null) {
+                AutoStartStatus.UNKNOWN
+            } else {
+                AutoStartStatus.UNKNOWN
+            }
+        } catch (e: Exception) {
+            android.util.Log.w("PermissionUtils", "检查OPPO自启动权限失败: ${e.message}")
+            AutoStartStatus.UNKNOWN
+        }
+    }
+
+    /**
+     * 检查VIVO自启动权限
+     */
+    private fun checkVivoAutoStart(context: Context): AutoStartStatus {
+        return try {
+            val intent = Intent().apply {
+                component = android.content.ComponentName(
+                    "com.iqoo.secure",
+                    "com.iqoo.secure.ui.phoneoptimize.AddWhiteListActivity"
+                )
+            }
+            if (intent.resolveActivity(context.packageManager) != null) {
+                AutoStartStatus.UNKNOWN
+            } else {
+                AutoStartStatus.UNKNOWN
+            }
+        } catch (e: Exception) {
+            android.util.Log.w("PermissionUtils", "检查VIVO自启动权限失败: ${e.message}")
+            AutoStartStatus.UNKNOWN
+        }
+    }
+
+    /**
+     * 检查魅族自启动权限
+     */
+    private fun checkMeizuAutoStart(context: Context): AutoStartStatus {
+        return try {
+            val intent = Intent("com.meizu.safe.security.SHOW_APPSEC").apply {
+                addCategory(Intent.CATEGORY_DEFAULT)
+                putExtra("packageName", context.packageName)
+            }
+            if (intent.resolveActivity(context.packageManager) != null) {
+                AutoStartStatus.UNKNOWN
+            } else {
+                AutoStartStatus.UNKNOWN
+            }
+        } catch (e: Exception) {
+            android.util.Log.w("PermissionUtils", "检查魅族自启动权限失败: ${e.message}")
+            AutoStartStatus.UNKNOWN
+        }
+    }
+
+    /**
+     * 检查三星自启动权限
+     */
+    private fun checkSamsungAutoStart(context: Context): AutoStartStatus {
+        return try {
+            // 三星通常不需要特殊的自启动权限设置
+            AutoStartStatus.ENABLED
+        } catch (e: Exception) {
+            android.util.Log.w("PermissionUtils", "检查三星自启动权限失败: ${e.message}")
+            AutoStartStatus.UNKNOWN
+        }
+    }
+
+    /**
+     * 获取自启动设置Intent
+     */
+    fun getAutoStartSettingsIntent(context: Context): Intent? {
+        val manufacturer = Build.MANUFACTURER.lowercase()
+        val brand = Build.BRAND.lowercase()
+
+        return try {
+            when {
+                manufacturer.contains("xiaomi") || brand.contains("xiaomi") -> {
+                    Intent().apply {
+                        component = android.content.ComponentName(
+                            "com.miui.securitycenter",
+                            "com.miui.permcenter.autostart.AutoStartManagementActivity"
+                        )
+                    }
+                }
+                manufacturer.contains("huawei") || brand.contains("huawei") || brand.contains("honor") -> {
+                    Intent().apply {
+                        component = android.content.ComponentName(
+                            "com.huawei.systemmanager",
+                            "com.huawei.systemmanager.startupmgr.ui.StartupNormalAppListActivity"
+                        )
+                    }
+                }
+                manufacturer.contains("oppo") || brand.contains("oppo") -> {
+                    Intent().apply {
+                        component = android.content.ComponentName(
+                            "com.coloros.safecenter",
+                            "com.coloros.safecenter.permission.startup.StartupAppListActivity"
+                        )
+                    }
+                }
+                manufacturer.contains("vivo") || brand.contains("vivo") -> {
+                    Intent().apply {
+                        component = android.content.ComponentName(
+                            "com.iqoo.secure",
+                            "com.iqoo.secure.ui.phoneoptimize.AddWhiteListActivity"
+                        )
+                    }
+                }
+                manufacturer.contains("meizu") || brand.contains("meizu") -> {
+                    Intent("com.meizu.safe.security.SHOW_APPSEC").apply {
+                        addCategory(Intent.CATEGORY_DEFAULT)
+                        putExtra("packageName", context.packageName)
+                    }
+                }
+                else -> null
+            }?.takeIf { it.resolveActivity(context.packageManager) != null }
+        } catch (e: Exception) {
+            android.util.Log.w("PermissionUtils", "获取自启动设置Intent失败: ${e.message}")
+            null
+        }
+    }
+
+    /**
+     * 获取权限检查结果
+     */
+    data class PermissionCheckResult(
+        val hasBasicPermissions: Boolean,
+        val isBatteryOptimized: Boolean,
+        val autoStartStatus: AutoStartStatus,
+        val canRequestBatteryOptimization: Boolean,
+        val canOpenAutoStartSettings: Boolean,
+        val recommendations: List<String>
+    )
+
+    /**
+     * 全面检查应用权限状态
+     */
+    fun checkAllPermissions(context: Context): PermissionCheckResult {
+        val hasBasicPermissions = hasAllPermissions(context)
+        val isBatteryOptimized = !isBatteryOptimizationIgnored(context)
+        val autoStartStatus = checkAutoStartPermission(context)
+        val canRequestBatteryOptimization = canRequestBatteryOptimization(context)
+        val canOpenAutoStartSettings = getAutoStartSettingsIntent(context) != null
+
+        val recommendations = mutableListOf<String>()
+
+        if (!hasBasicPermissions) {
+            recommendations.add("请授予应用基础权限（存储、通知等）")
+        }
+
+        if (isBatteryOptimized && canRequestBatteryOptimization) {
+            recommendations.add("建议关闭电池优化以确保后台服务正常运行")
+        }
+
+        if (autoStartStatus != AutoStartStatus.ENABLED && canOpenAutoStartSettings) {
+            recommendations.add("建议开启自启动权限以确保开机后自动运行")
+        }
+
+        return PermissionCheckResult(
+            hasBasicPermissions = hasBasicPermissions,
+            isBatteryOptimized = isBatteryOptimized,
+            autoStartStatus = autoStartStatus,
+            canRequestBatteryOptimization = canRequestBatteryOptimization,
+            canOpenAutoStartSettings = canOpenAutoStartSettings,
+            recommendations = recommendations
+        )
     }
 }

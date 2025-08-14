@@ -327,6 +327,13 @@ class ClipboardSyncService : Service() {
                 return
             }
 
+            // 检查是否是短信调试信息，跳过上传
+            if (currentContent.contains("处理短信 - 发送方:") ||
+                currentContent.contains("📱 短信验证码")) {
+                Log.d(tag, "跳过短信调试信息，不上传: ${currentContent.take(50)}...")
+                return
+            }
+
             Log.d(tag, "发现新的剪切板内容，准备上传: ${currentContent.take(50)}...")
 
             // 更新记录

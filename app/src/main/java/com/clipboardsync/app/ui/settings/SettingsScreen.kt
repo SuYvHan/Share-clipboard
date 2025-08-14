@@ -5,20 +5,25 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.clipboardsync.app.domain.model.AppConfig
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
     onNavigateBack: () -> Unit,
+    onNavigateToSmsSettings: () -> Unit = {},
+    onShowPermissionCheck: () -> Unit = {},
     viewModel: SettingsViewModel = hiltViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
@@ -75,11 +80,26 @@ fun SettingsScreen(
 
             HorizontalDivider()
 
+            // 短信设置
+            SmsSettingsSection(
+                config = config,
+                onNavigateToSmsSettings = onNavigateToSmsSettings
+            )
+
+            HorizontalDivider()
+
             // 应用设置
             AppSettingsSection(
                 config = config,
                 onEnableNotificationsChange = viewModel::updateEnableNotifications,
                 onAutoStartOnBootChange = viewModel::updateAutoStartOnBoot
+            )
+
+            HorizontalDivider()
+
+            // 权限管理
+            PermissionManagementSection(
+                onShowPermissionCheck = onShowPermissionCheck
             )
 
             HorizontalDivider()
@@ -403,5 +423,152 @@ private fun SettingSwitch(
             checked = checked,
             onCheckedChange = onCheckedChange
         )
+    }
+}
+
+@Composable
+private fun SmsSettingsSection(
+    config: AppConfig,
+    onNavigateToSmsSettings: () -> Unit
+) {
+    Card {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            Text(
+                text = "短信验证码设置",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Medium
+            )
+
+            // 自动上传状态显示
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "自动上传短信验证码",
+                        style = MaterialTheme.typography.bodyLarge
+                    )
+                    Text(
+                        text = if (config.autoUploadSms) {
+                            "已启用 - 收到验证码短信时自动上传"
+                        } else {
+                            "已关闭 - 不会自动上传短信验证码"
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+
+                Icon(
+                    imageVector = if (config.autoUploadSms) {
+                        Icons.Default.CheckCircle
+                    } else {
+                        Icons.Default.Cancel
+                    },
+                    contentDescription = null,
+                    tint = if (config.autoUploadSms) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    }
+                )
+            }
+
+            // 详细设置按钮
+            OutlinedButton(
+                onClick = onNavigateToSmsSettings,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Icon(Icons.Default.Settings, contentDescription = null)
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("详细设置")
+                Spacer(modifier = Modifier.weight(1f))
+                Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = null)
+            }
+        }
+    }
+}
+
+@Composable
+private fun PermissionManagementSection(
+    onShowPermissionCheck: () -> Unit
+) {
+    Card {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            Text(
+                text = "权限管理",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Medium
+            )
+
+            // 权限检查说明
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "权限检查",
+                        style = MaterialTheme.typography.bodyLarge
+                    )
+                    Text(
+                        text = "检查应用权限状态，包括电池优化和自启动权限",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+
+                Icon(
+                    imageVector = Icons.Default.Security,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary
+                )
+            }
+
+            // 重新显示权限检查按钮
+            OutlinedButton(
+                onClick = onShowPermissionCheck,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Icon(Icons.Default.Refresh, contentDescription = null)
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("重新检查权限")
+            }
+
+            // 权限说明
+            Card(
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                )
+            ) {
+                Column(
+                    modifier = Modifier.padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = "💡 权限说明",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Medium
+                    )
+
+                    Text(
+                        text = "• 基础权限：存储、通知等应用基本功能权限\n" +
+                              "• 电池优化：关闭后可确保后台服务正常运行\n" +
+                              "• 自启动权限：开启后可在开机时自动启动应用",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
     }
 }
