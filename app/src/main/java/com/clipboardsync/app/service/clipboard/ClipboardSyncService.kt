@@ -64,8 +64,7 @@ class ClipboardSyncService : Service() {
     // 缓存最近同步的内容，避免重复同步
     private val recentSyncedContents = mutableSetOf<String>()
     private var lastSyncCacheCleanup = 0L
-    
-main
+
     private val tag = "ClipboardSyncService"
     
     companion object {
@@ -224,7 +223,7 @@ main
 
             repeat(retryCount) { attempt ->
                 try {
-                    val testClip = clipboardManager.primaryClip
+                    clipboardManager.primaryClip // 测试访问剪切板
                     Log.d(tag, "鸿蒙系统剪切板访问测试成功 (尝试 ${attempt + 1}/$retryCount)")
                     return true
                 } catch (e: SecurityException) {

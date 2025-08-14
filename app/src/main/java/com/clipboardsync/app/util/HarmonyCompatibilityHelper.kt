@@ -150,7 +150,7 @@ object HarmonyCompatibilityHelper {
     /**
      * 记录鸿蒙系统信息
      */
-    fun logHarmonySystemInfo(context: Context) {
+    fun logHarmonySystemInfo(@Suppress("UNUSED_PARAMETER") context: Context) {
         if (!isHarmonyOS()) {
             Log.d(TAG, "当前系统不是鸿蒙系统")
             return
