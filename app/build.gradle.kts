@@ -24,10 +24,22 @@ android {
     signingConfigs {
         create("release") {
             // GitHub Actions环境下的签名配置
-            storeFile = file("keystore.jks")
-            storePassword = System.getProperty("android.injected.signing.store.password")
-            keyAlias = System.getProperty("android.injected.signing.key.alias")
-            keyPassword = System.getProperty("android.injected.signing.key.password")
+            val keystoreFilePath = System.getProperty("android.injected.signing.store.file")
+            val keystoreFile = if (keystoreFilePath != null) {
+                file(keystoreFilePath)
+            } else {
+                file("keystore.jks")
+            }
+
+            if (keystoreFile.exists()) {
+                storeFile = keystoreFile
+                storePassword = System.getProperty("android.injected.signing.store.password")
+                keyAlias = System.getProperty("android.injected.signing.key.alias")
+                keyPassword = System.getProperty("android.injected.signing.key.password")
+                println("✅ 使用签名文件: ${keystoreFile.absolutePath}")
+            } else {
+                println("⚠️ 签名文件不存在: ${keystoreFile.absolutePath}")
+            }
         }
     }
 
@@ -43,7 +55,11 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
-            signingConfig = signingConfigs.getByName("release")
+            // 只有当keystore文件存在时才使用签名配置
+            val releaseSigningConfig = signingConfigs.getByName("release")
+            if (releaseSigningConfig.storeFile?.exists() == true) {
+                signingConfig = releaseSigningConfig
+            }
         }
     }
     compileOptions {

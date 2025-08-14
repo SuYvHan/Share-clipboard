@@ -92,8 +92,16 @@ jobs:
         else
           echo "🔐 配置签名证书..."
           echo "$KEYSTORE_BASE64" | base64 -d > app/keystore.jks
-          echo "SIGNING_ENABLED=true" >> $GITHUB_ENV
-          echo "✅ 签名证书配置完成"
+
+          # 验证keystore文件是否创建成功
+          if [ -f "app/keystore.jks" ]; then
+            echo "SIGNING_ENABLED=true" >> $GITHUB_ENV
+            echo "✅ 签名证书配置完成"
+            ls -la app/keystore.jks
+          else
+            echo "❌ keystore文件创建失败"
+            echo "SIGNING_ENABLED=false" >> $GITHUB_ENV
+          fi
         fi
 
     - name: Build signed APK
@@ -104,7 +112,10 @@ jobs:
         KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
       run: |
         echo "🔨 构建签名APK..."
+        echo "📁 Keystore路径: $(pwd)/app/keystore.jks"
+        ls -la app/keystore.jks
         ./gradlew assembleRelease \
+          -Pandroid.injected.signing.store.file="$(pwd)/app/keystore.jks" \
           -Pandroid.injected.signing.store.password="$KEYSTORE_PASSWORD" \
           -Pandroid.injected.signing.key.alias="$KEY_ALIAS" \
           -Pandroid.injected.signing.key.password="$KEY_PASSWORD"
