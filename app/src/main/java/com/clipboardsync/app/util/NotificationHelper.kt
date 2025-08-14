@@ -13,7 +13,7 @@ import com.clipboardsync.app.ui.main.MainActivity
 import kotlinx.coroutines.delay
 
 class NotificationHelper(private val context: Context) {
-    
+
     companion object {
         private const val TAG = "NotificationHelper"
         private const val CHANNEL_ID = "clipboard_sync_channel"
@@ -21,9 +21,17 @@ class NotificationHelper(private val context: Context) {
         private const val MAX_RETRY_ATTEMPTS = 3
         private const val RETRY_DELAY_MS = 2000L
     }
-    
+
     private var retryCount = 0
     private var isNotificationEnabled = true
+    private val harmonyConfig: HarmonyConfig by lazy {
+        HarmonyCompatibilityHelper.getHarmonyRecommendedConfig()
+    }
+
+    init {
+        // 记录鸿蒙系统信息
+        HarmonyCompatibilityHelper.logHarmonySystemInfo(context)
+    }
     
     /**
      * 尝试创建通知渠道，支持重试机制
@@ -119,12 +127,14 @@ class NotificationHelper(private val context: Context) {
             Log.w(TAG, "Notifications disabled, returning null")
             return null
         }
-        
+
+        Log.d(TAG, "开始创建前台服务通知")
+
         return try {
             val intent = Intent(context, MainActivity::class.java).apply {
                 flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
             }
-            
+
             val pendingIntent = PendingIntent.getActivity(
                 context,
                 0,
@@ -135,11 +145,20 @@ class NotificationHelper(private val context: Context) {
                     PendingIntent.FLAG_UPDATE_CURRENT
                 }
             )
-            
+
+            // 根据鸿蒙系统配置选择合适的图标
+            val iconResource = if (HarmonyCompatibilityHelper.isHarmonyOS()) {
+                Log.d(TAG, "检测到鸿蒙系统，使用兼容的Vector图标")
+                R.drawable.ic_notification_simple
+            } else {
+                Log.d(TAG, "非鸿蒙系统，使用WebP图标")
+                R.drawable.ic_notification
+            }
+
             NotificationCompat.Builder(context, CHANNEL_ID)
                 .setContentTitle("剪切板同步")
                 .setContentText(content)
-                .setSmallIcon(R.drawable.ic_notification)
+                .setSmallIcon(iconResource)
                 .setContentIntent(pendingIntent)
                 .setOngoing(true)
                 .setPriority(NotificationCompat.PRIORITY_LOW)
@@ -150,8 +169,70 @@ class NotificationHelper(private val context: Context) {
                 .build()
         } catch (e: Exception) {
             Log.e(TAG, "Error creating notification", e)
+            // 如果是鸿蒙系统且创建失败，尝试使用备用图标
+            if (HarmonyCompatibilityHelper.isHarmonyOS()) {
+                Log.w(TAG, "鸿蒙系统通知创建失败，尝试使用系统默认图标")
+                return createFallbackNotification(content)
+            }
             null
         }
+    }
+
+    /**
+     * 创建备用通知（用于鸿蒙系统兼容）
+     */
+    private fun createFallbackNotification(content: String): Notification? {
+        // 尝试多个备用图标
+        val fallbackIcons = listOf(
+            R.drawable.ic_notification_png,
+            android.R.drawable.ic_dialog_info,
+            android.R.drawable.stat_notify_sync,
+            android.R.drawable.ic_popup_reminder
+        )
+
+        for ((index, iconRes) in fallbackIcons.withIndex()) {
+            try {
+                Log.d(TAG, "尝试备用图标 ${index + 1}/${fallbackIcons.size}: $iconRes")
+
+                val intent = Intent(context, MainActivity::class.java).apply {
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                }
+
+                val pendingIntent = PendingIntent.getActivity(
+                    context,
+                    0,
+                    intent,
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                    } else {
+                        PendingIntent.FLAG_UPDATE_CURRENT
+                    }
+                )
+
+                val notification = NotificationCompat.Builder(context, CHANNEL_ID)
+                    .setContentTitle("剪切板同步")
+                    .setContentText(content)
+                    .setSmallIcon(iconRes)
+                    .setContentIntent(pendingIntent)
+                    .setOngoing(true)
+                    .setPriority(NotificationCompat.PRIORITY_LOW)
+                    .setCategory(NotificationCompat.CATEGORY_SERVICE)
+                    .setShowWhen(false)
+                    .setSound(null)
+                    .setVibrate(null)
+                    .build()
+
+                Log.i(TAG, "备用图标 $iconRes 创建成功")
+                return notification
+
+            } catch (e: Exception) {
+                Log.w(TAG, "备用图标 $iconRes 创建失败: ${e.message}")
+                continue
+            }
+        }
+
+        Log.e(TAG, "所有备用图标都创建失败")
+        return null
     }
     
     /**

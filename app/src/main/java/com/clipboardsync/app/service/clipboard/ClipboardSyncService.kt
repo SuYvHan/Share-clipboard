@@ -21,11 +21,13 @@ import com.clipboardsync.app.domain.repository.ConfigRepository
 import com.clipboardsync.app.network.http.ClipboardHttpService
 import com.clipboardsync.app.network.websocket.WebSocketClient
 import com.clipboardsync.app.ui.main.MainActivity
+import com.clipboardsync.app.util.HarmonyCompatibilityHelper
 import com.clipboardsync.app.util.NotificationHelper
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.first
 import java.io.ByteArrayOutputStream
+import java.lang.reflect.Method
 import java.text.SimpleDateFormat
 import java.util.*
 import javax.inject.Inject
@@ -54,7 +56,8 @@ class ClipboardSyncService : Service() {
     private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var lastForegroundCheck: Long = 0 // 记录最后一次前台检查时间
     private var pendingClipboardCheck = false // 是否有待处理的剪切板检查
-    
+    private val harmonyConfig by lazy { HarmonyCompatibilityHelper.getHarmonyRecommendedConfig() }
+
     private val tag = "ClipboardSyncService"
     
     companion object {
@@ -172,6 +175,12 @@ class ClipboardSyncService : Service() {
      * 检查是否可以访问剪切板（综合检查）
      */
     private fun canAccessClipboard(): Boolean {
+        // 鸿蒙系统特殊处理
+        if (HarmonyCompatibilityHelper.isHarmonyOS()) {
+            Log.d(tag, "鸿蒙系统剪切板访问检查")
+            return canAccessClipboardHarmony()
+        }
+
         // Android 12+ 需要前台检查
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             val inForeground = isAppInForeground()
@@ -191,6 +200,44 @@ class ClipboardSyncService : Service() {
             false
         } catch (e: Exception) {
             Log.w(tag, "剪切板访问异常: ${e.message}")
+            false
+        }
+    }
+
+    /**
+     * 鸿蒙系统剪切板访问检查
+     */
+    private fun canAccessClipboardHarmony(): Boolean {
+        return try {
+            // 使用鸿蒙系统推荐配置
+            val retryCount = harmonyConfig.clipboardRetryCount
+            val retryDelay = harmonyConfig.clipboardRetryDelay
+            var lastException: Exception? = null
+
+            repeat(retryCount) { attempt ->
+                try {
+                    val testClip = clipboardManager.primaryClip
+                    Log.d(tag, "鸿蒙系统剪切板访问测试成功 (尝试 ${attempt + 1}/$retryCount)")
+                    return true
+                } catch (e: SecurityException) {
+                    lastException = e
+                    Log.w(tag, "鸿蒙系统剪切板访问被拒绝 (尝试 ${attempt + 1}/$retryCount): ${e.message}")
+                    if (attempt < retryCount - 1) {
+                        Thread.sleep(retryDelay)
+                    }
+                } catch (e: Exception) {
+                    lastException = e
+                    Log.w(tag, "鸿蒙系统剪切板访问异常 (尝试 ${attempt + 1}/$retryCount): ${e.message}")
+                    if (attempt < retryCount - 1) {
+                        Thread.sleep(retryDelay)
+                    }
+                }
+            }
+
+            Log.w(tag, "鸿蒙系统剪切板访问失败，重试${retryCount}次后放弃，最后错误: ${lastException?.message}")
+            false
+        } catch (e: Exception) {
+            Log.e(tag, "鸿蒙系统剪切板检查异常", e)
             false
         }
     }

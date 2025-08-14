@@ -94,17 +94,46 @@ class WebSocketClient @Inject constructor() {
                             try {
                                 val dataElement = jsonObject["data"]
                                 if (dataElement != null && dataElement !is JsonNull) {
-                                    val clipboardItem = json.decodeFromJsonElement<ClipboardItem>(dataElement)
-                                    val message = WebSocketMessage(
-                                        type = "sync",
-                                        data = clipboardItem
-                                    )
-                                    coroutineScope.launch {
-                                        _messageFlow.emit(message)
+                                    // 检查data是否包含ClipboardItem的必需字段
+                                    val dataObject = dataElement.jsonObject
+                                    val hasRequiredFields = dataObject.containsKey("id") &&
+                                                          dataObject.containsKey("type") &&
+                                                          dataObject.containsKey("content") &&
+                                                          dataObject.containsKey("deviceId") &&
+                                                          dataObject.containsKey("createdAt") &&
+                                                          dataObject.containsKey("updatedAt")
+
+                                    if (hasRequiredFields) {
+                                        val clipboardItem = json.decodeFromJsonElement<ClipboardItem>(dataElement)
+                                        val message = WebSocketMessage(
+                                            type = "sync",
+                                            data = clipboardItem
+                                        )
+                                        coroutineScope.launch {
+                                            _messageFlow.emit(message)
+                                        }
+                                    } else {
+                                        // 这是连接成功或其他状态消息，不是剪切板数据
+                                        Log.d(tag, "Received sync status message: $text")
+                                        val message = WebSocketMessage(
+                                            type = "sync_status",
+                                            message = dataObject["message"]?.jsonPrimitive?.content
+                                        )
+                                        coroutineScope.launch {
+                                            _messageFlow.emit(message)
+                                        }
                                     }
                                 }
                             } catch (e: Exception) {
                                 Log.e(tag, "Failed to parse sync message", e)
+                                // 发送错误状态消息
+                                val errorMessage = WebSocketMessage(
+                                    type = "sync_error",
+                                    message = "消息解析失败: ${e.message}"
+                                )
+                                coroutineScope.launch {
+                                    _messageFlow.emit(errorMessage)
+                                }
                             }
                         }
                         "delete" -> {
