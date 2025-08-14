@@ -56,6 +56,9 @@ class ClipboardSyncService : Service() {
     private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var lastForegroundCheck: Long = 0 // 记录最后一次前台检查时间
     private var pendingClipboardCheck = false // 是否有待处理的剪切板检查
+    private var serviceStartTime: Long = 0 // 记录服务启动时间
+    private var isInitialSyncCompleted = false // 是否已完成初始同步
+    private var pendingInitialClipboardCheck = false // 是否有待处理的初始剪切板检查
 
     private val harmonyConfig by lazy { HarmonyCompatibilityHelper.getHarmonyRecommendedConfig() }
 
@@ -95,6 +98,7 @@ class ClipboardSyncService : Service() {
         super.onCreate()
         Log.d(tag, "Service created")
 
+        serviceStartTime = System.currentTimeMillis() // 记录服务启动时间
         clipboardManager = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         notificationHelper = NotificationHelper(this)
 
@@ -309,6 +313,21 @@ class ClipboardSyncService : Service() {
             try {
                 Log.d(tag, "应用进入前台，开始检查剪切板状态")
 
+                // 检查服务是否刚启动（避免应用启动时立即同步空内容）
+                val currentTime = System.currentTimeMillis()
+                val timeSinceServiceStart = currentTime - serviceStartTime
+                if (timeSinceServiceStart < 3000) { // 服务启动后3秒内
+                    Log.d(tag, "服务刚启动 ${timeSinceServiceStart}ms，延迟检查剪切板以避免同步空内容")
+                    kotlinx.coroutines.delay(3000 - timeSinceServiceStart) // 等待到服务启动3秒后
+                }
+
+                // 检查是否已完成初始同步
+                if (!isInitialSyncCompleted) {
+                    Log.d(tag, "初始同步尚未完成，标记为待处理的初始剪切板检查")
+                    pendingInitialClipboardCheck = true
+                    return@launch
+                }
+
                 // 1. 如果有待处理的剪切板检查，立即执行
                 if (pendingClipboardCheck) {
                     Log.d(tag, "执行待处理的剪切板检查")
@@ -353,13 +372,21 @@ class ClipboardSyncService : Service() {
             }
 
             if (clipData == null || clipData.itemCount == 0) {
-                Log.d(tag, "剪切板为空，无需处理")
+                Log.d(tag, "剪切板为空，跳过前台检查同步")
                 return
             }
 
             val item = clipData.getItemAt(0)
             val currentContent = when {
-                item.text != null -> item.text.toString()
+                item.text != null -> {
+                    val textContent = item.text.toString()
+                    // 检查文本内容是否为空或只包含空白字符
+                    if (textContent.isBlank()) {
+                        Log.d(tag, "剪切板文本内容为空，跳过前台检查同步")
+                        return
+                    }
+                    textContent
+                }
                 item.uri != null -> item.uri.toString()
                 else -> {
                     Log.d(tag, "剪切板内容类型不支持")
@@ -385,6 +412,16 @@ class ClipboardSyncService : Service() {
             if (currentContent.contains("处理短信 - 发送方:") ||
                 currentContent.contains("📱 短信验证码")) {
                 Log.d(tag, "跳过短信调试信息，不上传: ${currentContent.take(50)}...")
+                return
+            }
+
+            // 检查云端是否已存在相同内容
+            val existsInCloud = checkIfContentExistsInCloud(currentContent)
+            if (existsInCloud) {
+                Log.d(tag, "云端已存在相同内容，跳过上传: ${currentContent.take(50)}...")
+                // 更新本地记录但不上传
+                lastClipboardContent = currentContent
+                updateNotification("内容已存在于云端: ${currentContent.take(20)}...")
                 return
             }
 
@@ -468,13 +505,27 @@ class ClipboardSyncService : Service() {
                 return
             }
 
-            if (clipData == null || clipData.itemCount == 0) return
+            if (clipData == null || clipData.itemCount == 0) {
+                Log.d(tag, "剪切板为空，跳过剪切板变化处理")
+                return
+            }
 
             val item = clipData.getItemAt(0)
             val currentContent = when {
-                item.text != null -> item.text.toString()
+                item.text != null -> {
+                    val textContent = item.text.toString()
+                    // 检查文本内容是否为空或只包含空白字符
+                    if (textContent.isBlank()) {
+                        Log.d(tag, "剪切板文本内容为空，跳过剪切板变化处理")
+                        return
+                    }
+                    textContent
+                }
                 item.uri != null -> item.uri.toString()
-                else -> return
+                else -> {
+                    Log.d(tag, "剪切板内容类型不支持，跳过处理")
+                    return
+                }
             }
 
             // 避免重复处理相同内容
@@ -497,6 +548,16 @@ class ClipboardSyncService : Service() {
                 Log.d(tag, "跳过最近同步过的内容，避免重复: ${currentContent.take(50)}...")
                 lastClipboardContent = currentContent
                 return
+            }
+
+            // 检查云端是否已存在相同内容（仅在初始同步完成后检查）
+            if (isInitialSyncCompleted) {
+                val existsInCloud = checkIfContentExistsInCloud(currentContent)
+                if (existsInCloud) {
+                    Log.d(tag, "云端已存在相同内容，跳过剪切板变化上传: ${currentContent.take(50)}...")
+                    lastClipboardContent = currentContent
+                    return
+                }
             }
 
             lastClipboardContent = currentContent
@@ -972,7 +1033,12 @@ class ClipboardSyncService : Service() {
                 // 处理获取到的所有内容
                 val count = message.count ?: 0
                 updateNotification("已同步 $count 条记录")
-                Log.d(tag, "Synced $count items")
+                Log.d(tag, "Synced $count items from server")
+
+                // 触发初始同步完成处理
+                serviceScope.launch {
+                    handleInitialSyncCompleted()
+                }
             }
         }
     }
@@ -1000,6 +1066,61 @@ class ClipboardSyncService : Service() {
             recentSyncedContents.clear()
             lastSyncCacheCleanup = currentTime
             Log.d(tag, "已清理同步内容缓存")
+        }
+    }
+
+    /**
+     * 检查内容是否已存在于云端
+     */
+    private suspend fun checkIfContentExistsInCloud(content: String): Boolean {
+        return try {
+            // 使用Repository方法直接检查内容是否已同步
+            val isContentSynced = clipboardRepository.isContentSynced(content)
+
+            if (isContentSynced) {
+                Log.d(tag, "在数据库中找到已同步的相同内容")
+                return true
+            }
+
+            // 额外检查：如果内容在最近同步的缓存中，说明是最近同步的
+            val isRecentlySynced = recentSyncedContents.contains(content)
+            if (isRecentlySynced) {
+                Log.d(tag, "内容在最近同步缓存中，确认已同步")
+                return true
+            }
+
+            // 检查内容是否与最近同步设置的内容相同
+            val isRecentlySyncedContent = content == lastSyncedContent &&
+                (System.currentTimeMillis() - syncSetTimestamp) < 300000 // 5分钟内
+
+            if (isRecentlySyncedContent) {
+                Log.d(tag, "内容与最近同步设置的内容相同")
+                return true
+            }
+
+            false
+        } catch (e: Exception) {
+            Log.e(tag, "检查云端内容时出错", e)
+            false // 出错时默认不存在，允许上传
+        }
+    }
+
+    /**
+     * 处理初始同步完成后的剪切板检查
+     */
+    private suspend fun handleInitialSyncCompleted() {
+        Log.d(tag, "初始同步完成，开始检查待处理的剪切板内容")
+        isInitialSyncCompleted = true
+
+        // 如果有待处理的初始剪切板检查，现在执行
+        if (pendingInitialClipboardCheck) {
+            Log.d(tag, "执行待处理的初始剪切板检查")
+            pendingInitialClipboardCheck = false
+
+            // 延迟一小段时间确保数据库已更新
+            kotlinx.coroutines.delay(500)
+
+            checkAndUploadCurrentClipboard()
         }
     }
 }

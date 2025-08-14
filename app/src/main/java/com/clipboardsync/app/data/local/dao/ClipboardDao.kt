@@ -21,7 +21,13 @@ interface ClipboardDao {
     
     @Query("SELECT * FROM clipboard_items WHERE isSynced = 0 ORDER BY localTimestamp ASC")
     suspend fun getUnsyncedItems(): List<ClipboardEntity>
-    
+
+    @Query("SELECT * FROM clipboard_items WHERE isSynced = 1 ORDER BY localTimestamp DESC")
+    suspend fun getSyncedItems(): List<ClipboardEntity>
+
+    @Query("SELECT COUNT(*) > 0 FROM clipboard_items WHERE content = :content AND isSynced = 1")
+    suspend fun isContentSynced(content: String): Boolean
+
     @Query("SELECT * FROM clipboard_items WHERE content LIKE '%' || :query || '%' ORDER BY localTimestamp DESC")
     fun searchItems(query: String): Flow<List<ClipboardEntity>>
     
