@@ -10,10 +10,12 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -49,6 +51,7 @@ class MainActivity : ComponentActivity() {
     private var showPermissionDialog by mutableStateOf(false)
     private var showTextUploadDialog by mutableStateOf(false)
     private var showPermissionDeniedDialog by mutableStateOf(false)
+    private var showClipboardLimitationDialog by mutableStateOf(false)
 
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -76,8 +79,11 @@ class MainActivity : ComponentActivity() {
     
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        
+
         clipboardManager = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+
+        // 通知服务应用已进入前台
+        notifyServiceAppInForeground()
         
         setContent {
             ClipboardSyncTheme {
@@ -117,11 +123,16 @@ class MainActivity : ComponentActivity() {
                 // 权限对话框
                 if (showPermissionDialog) {
                     PermissionDialog(
-                        permissions = PermissionUtils.getDeniedPermissions(this@MainActivity),
+                        permissions = PermissionUtils.getPermissionsToRequest(this@MainActivity),
                         onRequestPermissions = {
                             showPermissionDialog = false
-                            val deniedPermissions = PermissionUtils.getDeniedPermissions(this@MainActivity)
-                            permissionLauncher.launch(deniedPermissions.toTypedArray())
+                            val permissionsToRequest = PermissionUtils.getPermissionsToRequest(this@MainActivity)
+                            if (permissionsToRequest.isNotEmpty()) {
+                                permissionLauncher.launch(permissionsToRequest.toTypedArray())
+                            } else {
+                                // 没有需要申请的权限，直接启动服务
+                                startClipboardService()
+                            }
                         },
                         onDismiss = {
                             showPermissionDialog = false
@@ -156,11 +167,49 @@ class MainActivity : ComponentActivity() {
                         }
                     )
                 }
+
+                // 剪切板限制说明对话框 (Android 12+)
+                if (showClipboardLimitationDialog) {
+                    ClipboardLimitationDialog(
+                        onDismiss = { showClipboardLimitationDialog = false }
+                    )
+                }
             }
         }
         
         // 检查权限并启动服务
         checkPermissionsAndStartService()
+
+        // 如果是Android 12+，显示剪切板限制说明
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            showClipboardLimitationDialog = true
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // 应用回到前台时通知服务检查剪切板
+        notifyServiceAppInForeground()
+        Log.d("MainActivity", "应用回到前台，通知服务检查剪切板")
+    }
+
+    override fun onPause() {
+        super.onPause()
+        Log.d("MainActivity", "应用进入后台")
+    }
+
+    /**
+     * 通知服务应用在前台状态
+     */
+    private fun notifyServiceAppInForeground() {
+        try {
+            val intent = Intent(this, ClipboardSyncService::class.java).apply {
+                action = ClipboardSyncService.ACTION_APP_IN_FOREGROUND
+            }
+            startService(intent)
+        } catch (e: Exception) {
+            Log.w("MainActivity", "通知服务前台状态失败: ${e.message}")
+        }
     }
     
     private fun checkPermissionsAndStartService() {
@@ -207,12 +256,23 @@ fun MainScreen(
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val filteredItems by viewModel.getFilteredItems().collectAsStateWithLifecycle()
     val connectionState by viewModel.connectionState.collectAsStateWithLifecycle()
-    
+
     var showFilterMenu by remember { mutableStateOf(false) }
-    
+    val snackbarHostState = remember { SnackbarHostState() }
+
     // 显示消息
-    LaunchedEffect(uiState.message, uiState.error) {
-        // 这里可以显示 SnackBar 或 Toast
+    LaunchedEffect(uiState.message, uiState.error, uiState.lastSyncMessage) {
+        uiState.message?.let { message ->
+            snackbarHostState.showSnackbar(message)
+            viewModel.clearMessage()
+        }
+        uiState.error?.let { error ->
+            snackbarHostState.showSnackbar(error)
+            viewModel.clearMessage()
+        }
+        uiState.lastSyncMessage?.let { syncMessage ->
+            snackbarHostState.showSnackbar(syncMessage)
+        }
     }
     
     Scaffold(
@@ -221,33 +281,61 @@ fun MainScreen(
                 title = { Text("剪切板同步") },
                 actions = {
                     // 连接状态指示器
-                    when (connectionState) {
-                        is com.clipboardsync.app.network.websocket.WebSocketClient.ConnectionState.Connected -> {
-                            Icon(
-                                Icons.Default.CloudDone,
-                                contentDescription = "已连接",
-                                tint = MaterialTheme.colorScheme.primary
-                            )
-                        }
-                        is com.clipboardsync.app.network.websocket.WebSocketClient.ConnectionState.Disconnected -> {
-                            Icon(
-                                Icons.Default.CloudOff,
-                                contentDescription = "未连接",
-                                tint = MaterialTheme.colorScheme.error
-                            )
-                        }
-                        is com.clipboardsync.app.network.websocket.WebSocketClient.ConnectionState.Reconnecting -> {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(24.dp),
-                                strokeWidth = 2.dp
-                            )
-                        }
-                        else -> {
-                            Icon(
-                                Icons.Default.Cloud,
-                                contentDescription = "连接中",
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        when (connectionState) {
+                            is com.clipboardsync.app.network.websocket.WebSocketClient.ConnectionState.Connected -> {
+                                Icon(
+                                    Icons.Default.CloudDone,
+                                    contentDescription = "已连接",
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                                Text(
+                                    text = "已连接",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                            is com.clipboardsync.app.network.websocket.WebSocketClient.ConnectionState.Disconnected -> {
+                                Icon(
+                                    Icons.Default.CloudOff,
+                                    contentDescription = "未连接",
+                                    tint = MaterialTheme.colorScheme.error,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                                Text(
+                                    text = "未连接",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.error
+                                )
+                            }
+                            is com.clipboardsync.app.network.websocket.WebSocketClient.ConnectionState.Reconnecting -> {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(20.dp),
+                                    strokeWidth = 2.dp
+                                )
+                                Text(
+                                    text = "重连中",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            else -> {
+                                Icon(
+                                    Icons.Default.Cloud,
+                                    contentDescription = "连接中",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                                Text(
+                                    text = "连接中",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
                         }
                     }
                     
@@ -291,12 +379,23 @@ fun MainScreen(
                                     showFilterMenu = false
                                 }
                             )
+                            HorizontalDivider()
+                            DropdownMenuItem(
+                                text = { Text("清除所有本地记录") },
+                                onClick = {
+                                    viewModel.clearAllLocalClipboard()
+                                    showFilterMenu = false
+                                },
+                                leadingIcon = {
+                                    Icon(Icons.Default.DeleteSweep, contentDescription = null)
+                                }
+                            )
                         }
                     }
                     
-                    // 同步按钮
-                    IconButton(onClick = { viewModel.syncWithServer() }) {
-                        Icon(Icons.Default.Sync, contentDescription = "同步")
+                    // 同步所有按钮（直接触发同步所有云端剪切板）
+                    IconButton(onClick = { viewModel.syncAllClipboardFromServer() }) {
+                        Icon(Icons.Default.CloudDownload, contentDescription = "同步所有云端剪切板")
                     }
                     
                     // 设置按钮
@@ -312,6 +411,9 @@ fun MainScreen(
                 onFileUpload = onFileUpload,
                 onTextUpload = onTextUpload
             )
+        },
+        snackbarHost = {
+            SnackbarHost(hostState = snackbarHostState)
         }
     ) { paddingValues ->
         Column(
@@ -319,6 +421,43 @@ fun MainScreen(
                 .fillMaxSize()
                 .padding(paddingValues)
         ) {
+            // 同步状态提示
+            uiState.lastSyncMessage?.let { message ->
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 8.dp)
+                        .clickable { viewModel.syncAllClipboardFromServer() },
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.primaryContainer
+                    )
+                ) {
+                    Row(
+                        modifier = Modifier.padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(
+                            Icons.Default.CloudDownload,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Text(
+                            text = message,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Text(
+                            text = "点击同步",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f)
+                        )
+                    }
+                }
+            }
+
             // 搜索栏
             OutlinedTextField(
                 value = uiState.searchQuery,
@@ -508,6 +647,79 @@ fun TextUploadDialog(
         dismissButton = {
             TextButton(onClick = onDismiss) {
                 Text("取消")
+            }
+        }
+    )
+}
+
+@Composable
+fun ClipboardLimitationDialog(
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Icon(
+                    Icons.Default.Info,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary
+                )
+                Text(
+                    text = "剪切板同步说明",
+                    style = MaterialTheme.typography.headlineSmall
+                )
+            }
+        },
+        text = {
+            Column(
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Text(
+                    text = "Android 12+ 系统限制",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.primary
+                )
+
+                Text(
+                    text = "为了保护用户隐私，Android 12及以上版本限制了后台应用访问剪切板。",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+
+                Text(
+                    text = "📋 剪切板同步工作原理：",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.secondary
+                )
+
+                Text(
+                    text = "• 当应用在前台时：可以正常监听和同步剪切板\n" +
+                          "• 当应用在后台时：无法访问剪切板内容\n" +
+                          "• 重新打开应用时：会自动检查并上传剪切板最新内容\n" +
+                          "• 如果后台复制失败，前台会自动重新上传",
+                    style = MaterialTheme.typography.bodySmall
+                )
+
+                Text(
+                    text = "💡 使用建议：",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.tertiary
+                )
+
+                Text(
+                    text = "• 复制内容后，短暂打开应用确保同步\n" +
+                          "• 使用应用内的上传功能手动同步内容\n" +
+                          "• 服务会在后台保持运行，等待应用回到前台",
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("我知道了")
             }
         }
     )

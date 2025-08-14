@@ -19,11 +19,16 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
 
-    <!-- 通知权限 -->
-    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- 通知权限 (Android 13+) -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"
+        android:minSdkVersion="33" />
 
     <!-- 开机自启动权限 -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
+    <!-- 获取运行任务权限，用于检测应用前台状态 -->
+    <uses-permission android:name="android.permission.GET_TASKS"
+        tools:ignore="ProtectedPermissions" />
 
     <application
         android:name=".ClipboardSyncApplication"

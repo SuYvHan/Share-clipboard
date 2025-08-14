@@ -60,6 +60,7 @@ class MainViewModel @Inject constructor(
     
     init {
         observeWebSocketMessages()
+        observeConnectionState()
     }
     
     private fun observeWebSocketMessages() {
@@ -82,7 +83,63 @@ class MainViewModel @Inject constructor(
                     }
                     "all_content" -> {
                         // 处理获取到的所有内容
-                        _uiState.update { it.copy(lastSyncMessage = "已同步 ${message.count ?: 0} 条记录") }
+                        message.items?.let { items ->
+                            val currentConfig = config.value
+                            // 过滤掉来自当前设备的内容，只同步其他设备的内容
+                            val itemsToSync = items.filter { it.deviceId != currentConfig.deviceId }
+                            if (itemsToSync.isNotEmpty()) {
+                                clipboardRepository.insertItems(itemsToSync, isSynced = true)
+                            }
+                            _uiState.update {
+                                it.copy(
+                                    lastSyncMessage = "已同步 ${itemsToSync.size} 条记录",
+                                    isLoading = false
+                                )
+                            }
+                        } ?: run {
+                            _uiState.update {
+                                it.copy(
+                                    lastSyncMessage = "已同步 ${message.count ?: 0} 条记录",
+                                    isLoading = false
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * 观察WebSocket连接状态，连接成功后自动同步所有剪切板内容
+     */
+    private fun observeConnectionState() {
+        viewModelScope.launch {
+            webSocketClient.connectionStateFlow.collect { state ->
+                when (state) {
+                    is WebSocketClient.ConnectionState.Connected -> {
+                        Log.d("MainViewModel", "WebSocket connected, requesting all clipboard content")
+                        _uiState.update { it.copy(lastSyncMessage = "WebSocket已连接，正在同步...") }
+                        // 连接成功后自动请求所有剪切板内容
+                        kotlinx.coroutines.delay(1000) // 等待1秒确保连接稳定
+                        webSocketClient.requestAllContent(limit = 500)
+                        Log.d("MainViewModel", "Requested all content with limit 500")
+                    }
+                    is WebSocketClient.ConnectionState.Disconnected -> {
+                        Log.d("MainViewModel", "WebSocket disconnected")
+                        _uiState.update { it.copy(lastSyncMessage = "WebSocket连接断开") }
+                    }
+                    is WebSocketClient.ConnectionState.Reconnecting -> {
+                        Log.d("MainViewModel", "WebSocket reconnecting, attempt: ${state.attempt}")
+                        _uiState.update { it.copy(lastSyncMessage = "WebSocket重连中...") }
+                    }
+                    is WebSocketClient.ConnectionState.Error -> {
+                        Log.e("MainViewModel", "WebSocket error: ${state.message}")
+                        _uiState.update { it.copy(lastSyncMessage = "WebSocket错误: ${state.message}") }
+                    }
+                    is WebSocketClient.ConnectionState.Failed -> {
+                        Log.e("MainViewModel", "WebSocket failed: ${state.message}")
+                        _uiState.update { it.copy(lastSyncMessage = "WebSocket连接失败: ${state.message}") }
                     }
                 }
             }
@@ -125,7 +182,7 @@ class MainViewModel @Inject constructor(
                 val result = clipboardRepository.syncWithServer()
                 result.fold(
                     onSuccess = { items ->
-                        _uiState.update { 
+                        _uiState.update {
                             it.copy(
                                 isLoading = false,
                                 message = "同步成功，获取到 ${items.size} 条记录"
@@ -133,7 +190,7 @@ class MainViewModel @Inject constructor(
                         }
                     },
                     onFailure = { error ->
-                        _uiState.update { 
+                        _uiState.update {
                             it.copy(
                                 isLoading = false,
                                 error = "同步失败: ${error.message}"
@@ -142,7 +199,7 @@ class MainViewModel @Inject constructor(
                     }
                 )
             } catch (e: Exception) {
-                _uiState.update { 
+                _uiState.update {
                     it.copy(
                         isLoading = false,
                         error = "同步失败: ${e.message}"
@@ -151,9 +208,141 @@ class MainViewModel @Inject constructor(
             }
         }
     }
+
+    /**
+     * 同步所有云端剪切板内容
+     */
+    fun syncAllClipboardFromServer() {
+        viewModelScope.launch {
+            try {
+                _uiState.update {
+                    it.copy(
+                        isLoading = true,
+                        message = "正在同步所有云端剪切板..."
+                    )
+                }
+
+                if (webSocketClient.isConnected()) {
+                    // 通过WebSocket请求所有内容
+                    webSocketClient.requestAllContent(limit = 500)
+                    Log.d("MainViewModel", "Requested all content via WebSocket")
+                } else {
+                    // WebSocket未连接，尝试通过HTTP同步
+                    Log.w("MainViewModel", "WebSocket not connected, trying HTTP sync")
+                    syncAllViaHttp()
+                }
+            } catch (e: Exception) {
+                Log.e("MainViewModel", "Error syncing all clipboard content", e)
+                _uiState.update {
+                    it.copy(
+                        isLoading = false,
+                        error = "同步失败: ${e.message}"
+                    )
+                }
+            }
+        }
+    }
+
+    /**
+     * 通过HTTP同步所有剪切板内容（WebSocket不可用时的备用方案）
+     */
+    private suspend fun syncAllViaHttp() {
+        try {
+            val currentConfig = configRepository.getConfig().first()
+            val result = clipboardHttpService.getClipboardHistory(currentConfig, limit = 500)
+
+            result.fold(
+                onSuccess = { response ->
+                    try {
+                        // 解析JSON响应
+                        val json = kotlinx.serialization.json.Json {
+                            ignoreUnknownKeys = true
+                            coerceInputValues = true
+                        }
+                        val apiResponse = json.decodeFromString<com.clipboardsync.app.domain.model.ApiResponse<List<ClipboardItem>>>(response)
+
+                        if (apiResponse.success && apiResponse.data != null) {
+                            val items = apiResponse.data
+                            // 过滤掉来自当前设备的内容
+                            val itemsToSync = items.filter { it.deviceId != currentConfig.deviceId }
+
+                            if (itemsToSync.isNotEmpty()) {
+                                clipboardRepository.insertItems(itemsToSync, isSynced = true)
+                            }
+
+                            _uiState.update {
+                                it.copy(
+                                    isLoading = false,
+                                    message = "HTTP同步成功，获取到 ${itemsToSync.size} 条记录"
+                                )
+                            }
+                        } else {
+                            _uiState.update {
+                                it.copy(
+                                    isLoading = false,
+                                    error = "HTTP同步失败: ${apiResponse.message ?: "未知错误"}"
+                                )
+                            }
+                        }
+                    } catch (e: Exception) {
+                        Log.e("MainViewModel", "Error parsing HTTP response", e)
+                        _uiState.update {
+                            it.copy(
+                                isLoading = false,
+                                error = "解析响应失败: ${e.message}"
+                            )
+                        }
+                    }
+                },
+                onFailure = { error ->
+                    Log.e("MainViewModel", "HTTP sync failed", error)
+                    _uiState.update {
+                        it.copy(
+                            isLoading = false,
+                            error = "HTTP同步失败: ${error.message}"
+                        )
+                    }
+                }
+            )
+        } catch (e: Exception) {
+            Log.e("MainViewModel", "Error in HTTP sync", e)
+            _uiState.update {
+                it.copy(
+                    isLoading = false,
+                    error = "HTTP同步异常: ${e.message}"
+                )
+            }
+        }
+    }
     
     fun clearMessage() {
         _uiState.update { it.copy(message = null, error = null) }
+    }
+
+    /**
+     * 清除所有本地剪切板记录
+     */
+    fun clearAllLocalClipboard() {
+        viewModelScope.launch {
+            try {
+                _uiState.update { it.copy(isLoading = true) }
+                clipboardRepository.deleteAllItems()
+                _uiState.update {
+                    it.copy(
+                        isLoading = false,
+                        message = "已清除所有本地剪切板记录"
+                    )
+                }
+            } catch (e: Exception) {
+                Log.e("MainViewModel", "Error clearing all clipboard items", e)
+                _uiState.update {
+                    it.copy(
+                        isLoading = false,
+                        error = "清除失败: ${e.message}"
+                    )
+                }
+            }
+        }
     }
     
     private fun getContentPreview(item: ClipboardItem): String {

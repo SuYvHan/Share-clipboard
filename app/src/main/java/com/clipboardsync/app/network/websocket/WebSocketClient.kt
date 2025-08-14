@@ -10,7 +10,7 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.serialization.encodeToString
-import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.*
 import okhttp3.*
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
@@ -83,12 +83,86 @@ class WebSocketClient @Inject constructor() {
             override fun onMessage(webSocket: WebSocket, text: String) {
                 Log.d(tag, "Received message: $text")
                 try {
-                    val message = json.decodeFromString<WebSocketMessage>(text)
-                    coroutineScope.launch {
-                        _messageFlow.emit(message)
+                    // 先尝试解析为通用的JSON对象
+                    val jsonElement = json.parseToJsonElement(text)
+                    val jsonObject = jsonElement.jsonObject
+                    val messageType = jsonObject["type"]?.jsonPrimitive?.content
+
+                    when (messageType) {
+                        "sync" -> {
+                            // 处理同步消息
+                            try {
+                                val dataElement = jsonObject["data"]
+                                if (dataElement != null && dataElement !is JsonNull) {
+                                    val clipboardItem = json.decodeFromJsonElement<ClipboardItem>(dataElement)
+                                    val message = WebSocketMessage(
+                                        type = "sync",
+                                        data = clipboardItem
+                                    )
+                                    coroutineScope.launch {
+                                        _messageFlow.emit(message)
+                                    }
+                                }
+                            } catch (e: Exception) {
+                                Log.e(tag, "Failed to parse sync message", e)
+                            }
+                        }
+                        "delete" -> {
+                            // 处理删除消息
+                            val id = jsonObject["id"]?.jsonPrimitive?.content
+                            val message = WebSocketMessage(
+                                type = "delete",
+                                id = id
+                            )
+                            coroutineScope.launch {
+                                _messageFlow.emit(message)
+                            }
+                        }
+                        "all_content" -> {
+                            // 处理获取所有内容的响应
+                            try {
+                                val dataElement = jsonObject["data"]
+                                val count = jsonObject["count"]?.jsonPrimitive?.intOrNull
+                                val total = jsonObject["total"]?.jsonPrimitive?.intOrNull
+
+                                if (dataElement != null && dataElement is JsonArray) {
+                                    val items = json.decodeFromJsonElement<List<ClipboardItem>>(dataElement)
+                                    val message = WebSocketMessage(
+                                        type = "all_content",
+                                        items = items,
+                                        count = count,
+                                        total = total
+                                    )
+                                    coroutineScope.launch {
+                                        _messageFlow.emit(message)
+                                    }
+                                } else {
+                                    // 如果data不是数组，可能是空的响应
+                                    val message = WebSocketMessage(
+                                        type = "all_content",
+                                        items = emptyList(),
+                                        count = count ?: 0,
+                                        total = total ?: 0
+                                    )
+                                    coroutineScope.launch {
+                                        _messageFlow.emit(message)
+                                    }
+                                }
+                            } catch (e: Exception) {
+                                Log.e(tag, "Failed to parse all_content message", e)
+                            }
+                        }
+                        "connection_stats" -> {
+                            // 连接统计信息，记录日志但不处理
+                            Log.i(tag, "Received connection stats: $text")
+                        }
+                        else -> {
+                            // 其他类型的消息（如连接成功消息），记录日志但不处理
+                            Log.i(tag, "Received message of type '$messageType': $text")
+                        }
                     }
                 } catch (e: Exception) {
-                    Log.e(tag, "Failed to parse WebSocket message", e)
+                    Log.e(tag, "Failed to parse WebSocket message: $text", e)
                 }
             }
             
@@ -172,8 +246,10 @@ class WebSocketClient @Inject constructor() {
                 "content" to item.content,
                 "deviceId" to item.deviceId,
                 "fileName" to (item.fileName ?: ""),
-                "fileSize" to (item.fileSize ?: 0),
-                "mimeType" to (item.mimeType ?: "")
+                "fileSize" to (item.fileSize?.toString() ?: "0"),
+                "mimeType" to (item.mimeType ?: ""),
+                "createdAt" to item.createdAt,
+                "updatedAt" to item.updatedAt
             )
         )
         sendMessage(message)
@@ -182,11 +258,11 @@ class WebSocketClient @Inject constructor() {
     fun requestAllContent(limit: Int = 100) {
         val message = WebSocketRequest(
             type = "get_all_content",
-            data = mapOf("limit" to limit)
+            data = mapOf("limit" to limit.toString())
         )
         sendMessage(message)
     }
-    
+
     fun requestLatestContent(count: Int = 10) {
         val message = WebSocketRequest(
             type = "get_latest",
