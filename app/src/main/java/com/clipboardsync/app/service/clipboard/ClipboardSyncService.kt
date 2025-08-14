@@ -49,6 +49,8 @@ class ClipboardSyncService : Service() {
     private lateinit var notificationHelper: NotificationHelper
     private var lastClipboardContent: String? = null
     private var isProcessingClipboard = false
+    private var lastSyncedContent: String? = null // 记录最后一次同步设置的内容
+    private var syncSetTimestamp: Long = 0 // 记录同步设置的时间戳
     private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     
     private val tag = "ClipboardSyncService"
@@ -169,6 +171,9 @@ class ClipboardSyncService : Service() {
             if (isProcessingClipboard) return
             isProcessingClipboard = true
 
+            // 清理过期的同步记录
+            cleanupExpiredSyncRecords()
+
             val config = configRepository.getConfig().first()
             if (!config.autoSync) return
 
@@ -201,7 +206,20 @@ class ClipboardSyncService : Service() {
             }
 
             // 避免重复处理相同内容
-            if (currentContent == lastClipboardContent) return
+            if (currentContent == lastClipboardContent) {
+                Log.d(tag, "跳过重复内容: ${currentContent.take(50)}...")
+                return
+            }
+
+            // 检查是否是刚刚同步设置的内容（防止循环）
+            val currentTime = System.currentTimeMillis()
+            if (currentContent == lastSyncedContent &&
+                (currentTime - syncSetTimestamp) < 3000) { // 3秒内的同步内容
+                Log.d(tag, "跳过刚刚同步设置的内容，避免循环: ${currentContent.take(50)}...")
+                lastClipboardContent = currentContent // 更新记录但不处理
+                return
+            }
+
             lastClipboardContent = currentContent
             
             val clipboardItem = when {
@@ -243,21 +261,30 @@ class ClipboardSyncService : Service() {
 
     private fun setTextToClipboard(text: String) {
         try {
+            Log.d(tag, "开始设置同步文本到剪切板: ${text.take(50)}...")
+
+            // 记录即将设置的同步内容和时间戳
+            lastSyncedContent = text
+            syncSetTimestamp = System.currentTimeMillis()
+
             // 临时禁用剪切板监听，避免触发自己的处理逻辑
             isProcessingClipboard = true
 
             val clipData = ClipData.newPlainText("Synced Text", text)
             clipboardManager.setPrimaryClip(clipData)
 
-            Log.d(tag, "Successfully set text to clipboard: ${text.take(50)}...")
+            // 更新最后的剪切板内容记录
+            lastClipboardContent = text
+
+            Log.d(tag, "成功设置同步文本到剪切板: ${text.take(50)}...")
         } catch (e: Exception) {
-            Log.e(tag, "Error setting text to clipboard", e)
+            Log.e(tag, "设置同步文本到剪切板失败", e)
         } finally {
             // 延迟重新启用剪切板监听，避免立即触发
             serviceScope.launch {
-                kotlinx.coroutines.delay(1000) // 等待1秒
+                kotlinx.coroutines.delay(2000) // 等待2秒，给足够时间避免循环
                 isProcessingClipboard = false
-                Log.d(tag, "Re-enabled clipboard monitoring after sync")
+                Log.d(tag, "重新启用剪切板监听，同步内容: ${lastSyncedContent?.take(50)}")
             }
         }
     }
@@ -620,27 +647,33 @@ class ClipboardSyncService : Service() {
                     // 避免同步自己发送的内容
                     val config = configRepository.getConfig().first()
                     if (item.deviceId != config.deviceId) {
-                        // 保存来自其他设备的同步内容为剪切板块
-                        Log.d(tag, "Received sync from device: ${item.deviceId}, type: ${item.type}")
+                        Log.d(tag, "收到来自设备的同步: ${item.deviceId}, 类型: ${item.type}, 内容: ${item.content.take(50)}...")
+
+                        // 检查是否是刚刚发送的内容（双重保险）
+                        if (item.content == lastClipboardContent &&
+                            (System.currentTimeMillis() - syncSetTimestamp) < 5000) {
+                            Log.d(tag, "跳过可能的循环同步内容: ${item.content.take(50)}...")
+                            return@let
+                        }
 
                         // 如果是文本类型，直接设置到系统剪切板
                         if (item.type == com.clipboardsync.app.domain.model.ClipboardType.text) {
-                            Log.d(tag, "Setting text content to system clipboard: ${item.content.take(50)}...")
+                            Log.d(tag, "设置文本内容到系统剪切板: ${item.content.take(50)}...")
                             setTextToClipboard(item.content)
                             updateNotification("已同步文本到剪切板: ${getContentPreview(item)}")
                         } else {
                             // 非文本内容只保存，不设置到剪切板
                             if (item.type == com.clipboardsync.app.domain.model.ClipboardType.image) {
-                                Log.d(tag, "Image content length: ${item.content.length}")
-                                Log.d(tag, "Image content prefix: ${item.content.take(100)}")
+                                Log.d(tag, "图片内容长度: ${item.content.length}")
+                                Log.d(tag, "图片内容前缀: ${item.content.take(100)}")
                             }
                             updateNotification("收到同步: ${getContentPreview(item)}")
                         }
 
                         clipboardRepository.insertItem(item, isSynced = true)
-                        Log.d(tag, "Received and saved sync from device: ${item.deviceId}")
+                        Log.d(tag, "已接收并保存来自设备的同步: ${item.deviceId}")
                     } else {
-                        Log.d(tag, "Ignored sync from own device: ${item.deviceId}")
+                        Log.d(tag, "忽略来自自己设备的同步: ${item.deviceId}")
                     }
                 }
             }
@@ -656,6 +689,19 @@ class ClipboardSyncService : Service() {
                 updateNotification("已同步 $count 条记录")
                 Log.d(tag, "Synced $count items")
             }
+        }
+    }
+
+    /**
+     * 清理过期的同步记录，防止内存泄漏
+     */
+    private fun cleanupExpiredSyncRecords() {
+        val currentTime = System.currentTimeMillis()
+        // 如果同步记录超过10分钟，清理掉
+        if (lastSyncedContent != null && (currentTime - syncSetTimestamp) > 600000) {
+            Log.d(tag, "清理过期的同步记录")
+            lastSyncedContent = null
+            syncSetTimestamp = 0
         }
     }
 }

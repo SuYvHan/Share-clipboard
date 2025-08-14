@@ -44,15 +44,19 @@ data class CreateClipboardRequest(
 data class WebSocketMessage(
     val type: String,
     val data: ClipboardItem? = null,
+    val items: List<ClipboardItem>? = null,
     val id: String? = null,
     val count: Int? = null,
-    val message: String? = null
+    val message: String? = null,
+    val success: Boolean? = null,
+    val total: Int? = null
 )
 
 @Serializable
 data class WebSocketRequest(
     val type: String,
-    val data: Map<String, @Contextual Any>? = null,
+    val data: Map<String, String>? = null,
     val id: String? = null,
-    val count: Int? = null
+    val count: Int? = null,
+    val limit: Int? = null
 )

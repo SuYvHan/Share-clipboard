@@ -41,9 +41,34 @@ fun ClipboardItemCard(
     // 预计算格式化时间，避免每次重组都计算
     val formattedTime = remember(item.createdAt) {
         try {
-            SimpleDateFormat("MM-dd HH:mm", Locale.getDefault()).format(item.createdAt)
+            // 解析ISO 8601格式的时间字符串
+            val inputFormat = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.getDefault())
+            inputFormat.timeZone = java.util.TimeZone.getTimeZone("UTC")
+            val date = inputFormat.parse(item.createdAt)
+
+            // 格式化为本地时间显示
+            val outputFormat = SimpleDateFormat("MM-dd HH:mm", Locale.getDefault())
+            outputFormat.format(date ?: Date())
         } catch (e: Exception) {
-            "未知时间"
+            // 如果解析失败，尝试其他可能的格式或直接显示原始字符串的一部分
+            try {
+                // 尝试解析不带毫秒的格式
+                val inputFormat = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.getDefault())
+                inputFormat.timeZone = java.util.TimeZone.getTimeZone("UTC")
+                val date = inputFormat.parse(item.createdAt)
+                val outputFormat = SimpleDateFormat("MM-dd HH:mm", Locale.getDefault())
+                outputFormat.format(date ?: Date())
+            } catch (e2: Exception) {
+                // 如果所有解析都失败，显示原始时间字符串的简化版本
+                if (item.createdAt.length >= 16) {
+                    // 从 "2025-08-13T05:05:59.000Z" 提取 "08-13 05:05"
+                    val datePart = item.createdAt.substring(5, 10) // "08-13"
+                    val timePart = item.createdAt.substring(11, 16) // "05:05"
+                    "$datePart $timePart"
+                } else {
+                    "未知时间"
+                }
+            }
         }
     }
 
@@ -328,7 +353,12 @@ private fun ImageContent(item: ClipboardItem) {
             AsyncImage(
                 model = coil.request.ImageRequest.Builder(LocalContext.current)
                     .data(imageUrl)
-                    .addHeader(config.authKey, config.authValue)
+                    .apply {
+                        // 只有当authKey不为空时才添加认证头
+                        if (config.authKey.isNotBlank()) {
+                            addHeader(config.authKey, config.authValue)
+                        }
+                    }
                     .crossfade(true)
                     .build(),
                 contentDescription = "剪切板图片",
@@ -429,16 +459,7 @@ private fun FileContent(item: ClipboardItem) {
     }
 }
 
-private fun formatDateTime(dateTimeString: String): String {
-    return try {
-        val inputFormat = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.getDefault())
-        val outputFormat = SimpleDateFormat("MM-dd HH:mm", Locale.getDefault())
-        val date = inputFormat.parse(dateTimeString)
-        outputFormat.format(date ?: Date())
-    } catch (e: Exception) {
-        dateTimeString
-    }
-}
+
 
 private fun formatFileSize(bytes: Long): String {
     val kb = bytes / 1024.0
