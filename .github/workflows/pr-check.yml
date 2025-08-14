@@ -193,21 +193,27 @@ jobs:
             comment.user.type === 'Bot' && comment.body.includes('🤖 PR检查结果')
           );
           
+          const codeQualityStatus = '${{ needs.code-quality.result }}' === 'success' ? '✅ 通过' : '❌ 失败';
+          const buildTestStatus = '${{ needs.build-test.result }}' === 'success' ? '✅ 通过' : '❌ 失败';
+          const sizeCheckStatus = '${{ needs.size-check.result }}' === 'success' ? '✅ 通过' : '❌ 失败';
+
+          const allPassed = '${{ needs.code-quality.result }}' === 'success' &&
+                           '${{ needs.build-test.result }}' === 'success' &&
+                           '${{ needs.size-check.result }}' === 'success';
+
           const body = `🤖 **PR检查结果**
-          
+
           | 检查项 | 状态 |
           |--------|------|
-          | 代码质量 | ${{ needs.code-quality.result == 'success' && '✅ 通过' || '❌ 失败' }} |
-          | 构建测试 | ${{ needs.build-test.result == 'success' && '✅ 通过' || '❌ 失败' }} |
-          | APK大小 | ${{ needs.size-check.result == 'success' && '✅ 通过' || '❌ 失败' }} |
-          
+          | 代码质量 | ${codeQualityStatus} |
+          | 构建测试 | ${buildTestStatus} |
+          | APK大小 | ${sizeCheckStatus} |
+
           📋 **详细信息**
           - 构建时间: ${new Date().toLocaleString()}
           - 提交: ${context.sha.substring(0, 7)}
-          
-          ${needs.code-quality.result !== 'success' || needs.build-test.result !== 'success' || needs.size-check.result !== 'success' 
-            ? '⚠️ 请检查失败的项目并修复问题' 
-            : '🎉 所有检查都通过了！'}`;
+
+          ${allPassed ? '🎉 所有检查都通过了！' : '⚠️ 请检查失败的项目并修复问题'}`;
           
           if (botComment) {
             await github.rest.issues.updateComment({

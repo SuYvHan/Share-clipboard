@@ -1,12 +1,31 @@
 # GitHub Actions 工作流说明
 
+## 🔧 修复说明
+
+**已修复的问题：**
+- ✅ 修复了 `signed-release.yml` 中的 secrets 条件语法错误
+- ✅ 修复了 `pr-check.yml` 中的模板字符串语法问题
+- ✅ 添加了简化版本的构建工作流 (`build-simple.yml`)
+- ✅ 创建了工作流验证脚本
+
 ## 📋 工作流概览
 
 本项目包含以下GitHub Actions工作流，用于自动化构建、测试和发布流程：
 
 ### 🚀 主要工作流
 
-#### 1. `build-and-release.yml` - 构建和发布
+#### 1. `build-simple.yml` - 简化构建（推荐开始使用）
+**触发条件：**
+- 推送到 `main`/`master` 分支
+- Pull Request
+- 手动触发
+
+**功能：**
+- 构建Debug APK
+- 运行单元测试
+- 上传构建产物
+
+#### 2. `build-and-release.yml` - 完整构建和发布
 **触发条件：**
 - 推送到 `main`/`master` 分支
 - 创建标签 (`v*`)
