@@ -631,7 +631,7 @@ object PermissionUtils {
     /**
      * 检查三星自启动权限
      */
-    private fun checkSamsungAutoStart(context: Context): AutoStartStatus {
+    private fun checkSamsungAutoStart(@Suppress("UNUSED_PARAMETER") context: Context): AutoStartStatus {
         return try {
             // 三星通常不需要特殊的自启动权限设置
             AutoStartStatus.ENABLED
