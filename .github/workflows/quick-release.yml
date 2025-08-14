@@ -1,0 +1,98 @@
+name: Quick Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (e.g., v1.0.0)'
+        required: true
+        type: string
+      create_tag:
+        description: 'Create new tag'
+        required: false
+        type: boolean
+        default: true
+
+env:
+  JAVA_VERSION: '17'
+
+jobs:
+  quick-release:
+    name: Quick Build and Release
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Create tag
+      if: ${{ github.event.inputs.create_tag == 'true' }}
+      run: |
+        git config user.name "GitHub Actions"
+        git config user.email "actions@github.com"
+        git tag ${{ github.event.inputs.version }}
+        git push origin ${{ github.event.inputs.version }}
+
+    - name: Set up JDK
+      uses: actions/setup-java@v4
+      with:
+        java-version: ${{ env.JAVA_VERSION }}
+        distribution: 'temurin'
+
+    - name: Cache Gradle
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.gradle/caches
+          ~/.gradle/wrapper
+        key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*') }}
+        restore-keys: |
+          ${{ runner.os }}-gradle-
+
+    - name: Make gradlew executable
+      run: chmod +x gradlew
+
+    - name: Build Release APK
+      run: ./gradlew assembleRelease
+
+    - name: Get APK info
+      id: apk
+      run: |
+        APK_PATH=$(find app/build/outputs/apk/release -name "*.apk" | head -1)
+        APK_SIZE=$(du -h "$APK_PATH" | cut -f1)
+        APK_NAME=$(basename "$APK_PATH")
+        echo "path=$APK_PATH" >> $GITHUB_OUTPUT
+        echo "size=$APK_SIZE" >> $GITHUB_OUTPUT
+        echo "name=$APK_NAME" >> $GITHUB_OUTPUT
+
+    - name: Create Release
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: ${{ github.event.inputs.version }}
+        name: ClipboardSync ${{ github.event.inputs.version }}
+        files: ${{ steps.apk.outputs.path }}
+        body: |
+          ## 📱 剪切板同步应用 ${{ github.event.inputs.version }}
+          
+          ### 📦 下载
+          - **APK文件**: ${{ steps.apk.outputs.name }}
+          - **文件大小**: ${{ steps.apk.outputs.size }}
+          
+          ### 🔧 安装
+          1. 下载APK文件
+          2. 启用"未知来源"安装
+          3. 安装并授权
+          
+          ### ✨ 功能
+          - 🔄 实时剪切板同步
+          - 📱 多设备支持
+          - 🖼️ 图片同步
+          - 🔒 权限管理
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Success message
+      run: |
+        echo "🎉 快速发布完成！"
+        echo "📱 版本: ${{ github.event.inputs.version }}"
+        echo "📦 大小: ${{ steps.apk.outputs.size }}"
