@@ -10,6 +10,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -50,6 +51,7 @@ class MainActivity : ComponentActivity() {
     private var showPermissionDialog by mutableStateOf(false)
     private var showTextUploadDialog by mutableStateOf(false)
     private var showPermissionDeniedDialog by mutableStateOf(false)
+    private var showClipboardLimitationDialog by mutableStateOf(false)
 
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -77,8 +79,11 @@ class MainActivity : ComponentActivity() {
     
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        
+
         clipboardManager = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+
+        // 通知服务应用已进入前台
+        notifyServiceAppInForeground()
         
         setContent {
             ClipboardSyncTheme {
@@ -162,11 +167,49 @@ class MainActivity : ComponentActivity() {
                         }
                     )
                 }
+
+                // 剪切板限制说明对话框 (Android 12+)
+                if (showClipboardLimitationDialog) {
+                    ClipboardLimitationDialog(
+                        onDismiss = { showClipboardLimitationDialog = false }
+                    )
+                }
             }
         }
         
         // 检查权限并启动服务
         checkPermissionsAndStartService()
+
+        // 如果是Android 12+，显示剪切板限制说明
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            showClipboardLimitationDialog = true
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // 应用回到前台时通知服务检查剪切板
+        notifyServiceAppInForeground()
+        Log.d("MainActivity", "应用回到前台，通知服务检查剪切板")
+    }
+
+    override fun onPause() {
+        super.onPause()
+        Log.d("MainActivity", "应用进入后台")
+    }
+
+    /**
+     * 通知服务应用在前台状态
+     */
+    private fun notifyServiceAppInForeground() {
+        try {
+            val intent = Intent(this, ClipboardSyncService::class.java).apply {
+                action = ClipboardSyncService.ACTION_APP_IN_FOREGROUND
+            }
+            startService(intent)
+        } catch (e: Exception) {
+            Log.w("MainActivity", "通知服务前台状态失败: ${e.message}")
+        }
     }
     
     private fun checkPermissionsAndStartService() {
@@ -604,6 +647,79 @@ fun TextUploadDialog(
         dismissButton = {
             TextButton(onClick = onDismiss) {
                 Text("取消")
+            }
+        }
+    )
+}
+
+@Composable
+fun ClipboardLimitationDialog(
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Icon(
+                    Icons.Default.Info,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary
+                )
+                Text(
+                    text = "剪切板同步说明",
+                    style = MaterialTheme.typography.headlineSmall
+                )
+            }
+        },
+        text = {
+            Column(
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Text(
+                    text = "Android 12+ 系统限制",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.primary
+                )
+
+                Text(
+                    text = "为了保护用户隐私，Android 12及以上版本限制了后台应用访问剪切板。",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+
+                Text(
+                    text = "📋 剪切板同步工作原理：",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.secondary
+                )
+
+                Text(
+                    text = "• 当应用在前台时：可以正常监听和同步剪切板\n" +
+                          "• 当应用在后台时：无法访问剪切板内容\n" +
+                          "• 重新打开应用时：会自动检查并上传剪切板最新内容\n" +
+                          "• 如果后台复制失败，前台会自动重新上传",
+                    style = MaterialTheme.typography.bodySmall
+                )
+
+                Text(
+                    text = "💡 使用建议：",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.tertiary
+                )
+
+                Text(
+                    text = "• 复制内容后，短暂打开应用确保同步\n" +
+                          "• 使用应用内的上传功能手动同步内容\n" +
+                          "• 服务会在后台保持运行，等待应用回到前台",
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("我知道了")
             }
         }
     )

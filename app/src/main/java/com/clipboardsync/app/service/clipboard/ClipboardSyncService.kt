@@ -52,12 +52,15 @@ class ClipboardSyncService : Service() {
     private var lastSyncedContent: String? = null // 记录最后一次同步设置的内容
     private var syncSetTimestamp: Long = 0 // 记录同步设置的时间戳
     private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private var lastForegroundCheck: Long = 0 // 记录最后一次前台检查时间
+    private var pendingClipboardCheck = false // 是否有待处理的剪切板检查
     
     private val tag = "ClipboardSyncService"
     
     companion object {
         const val ACTION_START_SERVICE = "START_SERVICE"
         const val ACTION_STOP_SERVICE = "STOP_SERVICE"
+        const val ACTION_APP_IN_FOREGROUND = "APP_IN_FOREGROUND"
         
         fun startService(context: Context) {
             val intent = Intent(context, ClipboardSyncService::class.java).apply {
@@ -107,6 +110,7 @@ class ClipboardSyncService : Service() {
 
         setupClipboardListener()
         connectWebSocket()
+        startForegroundMonitoring()
     }
     
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -118,6 +122,10 @@ class ClipboardSyncService : Service() {
                 Log.d(tag, "Service stop command received")
                 stopSelf()
                 return START_NOT_STICKY
+            }
+            ACTION_APP_IN_FOREGROUND -> {
+                Log.d(tag, "App in foreground notification received")
+                handleAppInForeground()
             }
         }
         return START_STICKY
@@ -146,14 +154,44 @@ class ClipboardSyncService : Service() {
             val activityManager = getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
             val runningAppProcesses = activityManager.runningAppProcesses
 
-            runningAppProcesses?.any { processInfo ->
+            val isInForeground = runningAppProcesses?.any { processInfo ->
                 processInfo.processName == packageName &&
                 processInfo.importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND
             } ?: false
+
+            Log.d(tag, "前台状态检查: $isInForeground")
+            return isInForeground
         } catch (e: Exception) {
             Log.w(tag, "Error checking foreground status: ${e.message}")
-            // 如果检查失败，假设在前台以避免阻塞功能
+            // 如果检查失败，返回false以避免剪切板访问被拒绝
+            return false
+        }
+    }
+
+    /**
+     * 检查是否可以访问剪切板（综合检查）
+     */
+    private fun canAccessClipboard(): Boolean {
+        // Android 12+ 需要前台检查
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            val inForeground = isAppInForeground()
+            if (!inForeground) {
+                Log.d(tag, "应用不在前台，无法访问剪切板 (Android 12+)")
+                return false
+            }
+        }
+
+        // 尝试简单的剪切板访问测试
+        return try {
+            val testClip = clipboardManager.primaryClip
+            Log.d(tag, "剪切板访问测试成功")
             true
+        } catch (e: SecurityException) {
+            Log.w(tag, "剪切板访问被拒绝: ${e.message}")
+            false
+        } catch (e: Exception) {
+            Log.w(tag, "剪切板访问异常: ${e.message}")
+            false
         }
     }
     
@@ -164,7 +202,171 @@ class ClipboardSyncService : Service() {
             }
         }
     }
-    
+
+    /**
+     * 启动前台状态监控（Android 12+）
+     */
+    private fun startForegroundMonitoring() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            serviceScope.launch {
+                var wasPreviouslyForeground = false
+
+                while (true) {
+                    try {
+                        val isNowForeground = isAppInForeground()
+
+                        // 检测从后台切换到前台的状态变化
+                        if (!wasPreviouslyForeground && isNowForeground) {
+                            Log.d(tag, "检测到应用从后台切换到前台")
+
+                            // 延迟一小段时间确保应用完全进入前台
+                            kotlinx.coroutines.delay(1000)
+
+                            // 执行前台剪切板检查
+                            if (pendingClipboardCheck) {
+                                Log.d(tag, "执行待处理的剪切板检查")
+                                pendingClipboardCheck = false
+                                handleClipboardChange()
+                            } else {
+                                Log.d(tag, "主动检查当前剪切板内容")
+                                checkAndUploadCurrentClipboard()
+                            }
+                        }
+
+                        wasPreviouslyForeground = isNowForeground
+                        lastForegroundCheck = System.currentTimeMillis()
+
+                        // 每3秒检查一次前台状态（更频繁的检查）
+                        kotlinx.coroutines.delay(3000)
+                    } catch (e: Exception) {
+                        Log.e(tag, "前台监控异常", e)
+                        kotlinx.coroutines.delay(5000) // 出错时延长检查间隔
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * 处理应用进入前台的通知
+     */
+    private fun handleAppInForeground() {
+        serviceScope.launch {
+            try {
+                Log.d(tag, "应用进入前台，开始检查剪切板状态")
+
+                // 1. 如果有待处理的剪切板检查，立即执行
+                if (pendingClipboardCheck) {
+                    Log.d(tag, "执行待处理的剪切板检查")
+                    pendingClipboardCheck = false
+                    handleClipboardChange()
+                } else {
+                    // 2. 即使没有待处理的检查，也主动检查当前剪切板内容
+                    Log.d(tag, "主动检查当前剪切板内容")
+                    checkAndUploadCurrentClipboard()
+                }
+
+                // 更新通知状态
+                updateNotification("剪切板同步服务运行中")
+            } catch (e: Exception) {
+                Log.e(tag, "处理应用前台通知时出错", e)
+            }
+        }
+    }
+
+    /**
+     * 检查并上传当前剪切板内容（应用回到前台时调用）
+     */
+    private suspend fun checkAndUploadCurrentClipboard() {
+        try {
+            val config = configRepository.getConfig().first()
+            if (!config.autoSync) {
+                Log.d(tag, "自动同步已关闭，跳过前台剪切板检查")
+                return
+            }
+
+            // 检查是否可以访问剪切板
+            if (!canAccessClipboard()) {
+                Log.w(tag, "前台状态下仍无法访问剪切板")
+                return
+            }
+
+            val clipData = try {
+                clipboardManager.primaryClip
+            } catch (e: Exception) {
+                Log.e(tag, "获取剪切板内容失败: ${e.message}")
+                return
+            }
+
+            if (clipData == null || clipData.itemCount == 0) {
+                Log.d(tag, "剪切板为空，无需处理")
+                return
+            }
+
+            val item = clipData.getItemAt(0)
+            val currentContent = when {
+                item.text != null -> item.text.toString()
+                item.uri != null -> item.uri.toString()
+                else -> {
+                    Log.d(tag, "剪切板内容类型不支持")
+                    return
+                }
+            }
+
+            // 检查是否与上次处理的内容相同
+            if (currentContent == lastClipboardContent) {
+                Log.d(tag, "剪切板内容未变化，无需重复上传: ${currentContent.take(50)}...")
+                return
+            }
+
+            // 检查是否是刚刚同步设置的内容（防止循环）
+            val currentTime = System.currentTimeMillis()
+            if (currentContent == lastSyncedContent &&
+                (currentTime - syncSetTimestamp) < 5000) { // 5秒内的同步内容
+                Log.d(tag, "跳过刚刚同步设置的内容: ${currentContent.take(50)}...")
+                return
+            }
+
+            Log.d(tag, "发现新的剪切板内容，准备上传: ${currentContent.take(50)}...")
+
+            // 更新记录
+            lastClipboardContent = currentContent
+
+            // 创建剪切板项目并上传
+            val clipboardItem = when {
+                item.text != null -> createTextClipboardItem(currentContent, config)
+                item.uri != null -> createImageClipboardItem(item.uri, config)
+                else -> return
+            }
+
+            clipboardItem?.let { validItem ->
+                var syncSuccess = false
+
+                // 通过WebSocket同步到服务器
+                if (webSocketClient.isConnected()) {
+                    webSocketClient.syncClipboardItem(validItem)
+                    syncSuccess = true
+                    Log.d(tag, "前台检查：通过WebSocket发送剪切板内容: ${validItem.type}")
+                }
+
+                // 同时通过HTTP上传到服务器
+                uploadToHttpServer(validItem, config)
+
+                // 显示同步信息
+                if (syncSuccess) {
+                    updateNotification("已同步: ${getContentPreview(validItem)}")
+                } else {
+                    updateNotification("同步中: ${getContentPreview(validItem)}")
+                }
+
+                Log.d(tag, "前台检查：成功处理剪切板内容: ${validItem.type}")
+            }
+
+        } catch (e: Exception) {
+            Log.e(tag, "前台剪切板检查失败", e)
+        }
+    }
+
     private suspend fun handleClipboardChange() {
         try {
             // 防止重复处理
@@ -175,24 +377,30 @@ class ClipboardSyncService : Service() {
             cleanupExpiredSyncRecords()
 
             val config = configRepository.getConfig().first()
-            if (!config.autoSync) return
+            if (!config.autoSync) {
+                Log.d(tag, "自动同步已关闭，跳过剪切板处理")
+                return
+            }
 
-            // Android 12+ 剪切板访问限制检查
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                // 检查应用是否在前台或有剪切板访问权限
-                if (!isAppInForeground()) {
-                    Log.d(tag, "App not in foreground, skipping clipboard access (Android 12+)")
-                    return
-                }
+            // 检查是否可以访问剪切板
+            if (!canAccessClipboard()) {
+                Log.w(tag, "无法访问剪切板，标记为待处理 (Android 12+ 后台限制)")
+                // 标记有待处理的剪切板检查
+                pendingClipboardCheck = true
+                // 显示提示信息
+                updateNotification("剪切板访问受限 - 请打开应用")
+                return
             }
 
             val clipData = try {
                 clipboardManager.primaryClip
             } catch (e: SecurityException) {
-                Log.w(tag, "Security exception accessing clipboard (Android 12+): ${e.message}")
+                Log.w(tag, "剪切板访问被拒绝 (Android 12+): ${e.message}")
+                updateNotification("剪切板访问被拒绝 - 请打开应用")
                 return
             } catch (e: Exception) {
-                Log.e(tag, "Error accessing clipboard: ${e.message}")
+                Log.e(tag, "剪切板访问错误: ${e.message}")
+                updateNotification("剪切板访问错误")
                 return
             }
 
