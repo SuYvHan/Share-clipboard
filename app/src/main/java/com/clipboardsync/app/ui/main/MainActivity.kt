@@ -38,6 +38,7 @@ import com.clipboardsync.app.ui.components.ClipboardItemCard
 import com.clipboardsync.app.ui.components.PermissionDialog
 import com.clipboardsync.app.ui.components.PermissionDeniedDialog
 import com.clipboardsync.app.ui.settings.SettingsScreen
+import com.clipboardsync.app.ui.settings.SmsSettingsScreen
 import com.clipboardsync.app.ui.theme.ClipboardSyncTheme
 import com.clipboardsync.app.util.PermissionUtils
 import dagger.hilt.android.AndroidEntryPoint
@@ -113,6 +114,17 @@ class MainActivity : ComponentActivity() {
 
                     composable("settings") {
                         SettingsScreen(
+                            onNavigateBack = {
+                                navController.popBackStack()
+                            },
+                            onNavigateToSmsSettings = {
+                                navController.navigate("sms_settings")
+                            }
+                        )
+                    }
+
+                    composable("sms_settings") {
+                        SmsSettingsScreen(
                             onNavigateBack = {
                                 navController.popBackStack()
                             }

@@ -17,7 +17,11 @@ data class AppConfig(
     val autoStartOnBoot: Boolean = true,
     val authKey: String = "",
     val authValue: String = "",
-    val useSecureConnection: Boolean = false
+    val useSecureConnection: Boolean = false,
+    val autoUploadSms: Boolean = true,
+    val smsKeywords: List<String> = listOf("验证码", "验证", "code", "Code", "CODE", "验证码是", "动态码", "校验码"),
+    val smsFilterSender: Boolean = true,
+    val trustedSenders: List<String> = listOf("10086", "10010", "10000", "95533", "95588", "95599")
 ) {
     val websocketUrl: String
         get() = if (useSecureConnection) {

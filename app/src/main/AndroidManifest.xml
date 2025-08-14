@@ -30,6 +30,10 @@
     <uses-permission android:name="android.permission.GET_TASKS"
         tools:ignore="ProtectedPermissions" />
 
+    <!-- 短信权限，用于自动上传验证码 -->
+    <uses-permission android:name="android.permission.READ_SMS" />
+    <uses-permission android:name="android.permission.RECEIVE_SMS" />
+
     <application
         android:name=".ClipboardSyncApplication"
         android:allowBackup="true"
@@ -70,6 +74,16 @@
                 <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
                 <action android:name="android.intent.action.PACKAGE_REPLACED" />
                 <data android:scheme="package" />
+            </intent-filter>
+        </receiver>
+
+        <!-- 短信接收器，用于自动上传验证码 -->
+        <receiver
+            android:name=".service.sms.SmsReceiver"
+            android:enabled="true"
+            android:exported="true">
+            <intent-filter android:priority="1000">
+                <action android:name="android.provider.Telephony.SMS_RECEIVED" />
             </intent-filter>
         </receiver>
 

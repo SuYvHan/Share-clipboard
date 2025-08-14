@@ -8,6 +8,7 @@ import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.clipboardsync.app.domain.model.AppConfig
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -41,6 +42,12 @@ class ConfigManager @Inject constructor(
         private val AUTH_KEY = stringPreferencesKey("auth_key")
         private val AUTH_VALUE = stringPreferencesKey("auth_value")
         private val USE_SECURE_CONNECTION = booleanPreferencesKey("use_secure_connection")
+
+        // 短信相关配置
+        private val AUTO_UPLOAD_SMS = booleanPreferencesKey("auto_upload_sms")
+        private val SMS_KEYWORDS = stringSetPreferencesKey("sms_keywords")
+        private val SMS_FILTER_SENDER = booleanPreferencesKey("sms_filter_sender")
+        private val TRUSTED_SENDERS = stringSetPreferencesKey("trusted_senders")
     }
     
     val configFlow: Flow<AppConfig> = dataStore.data.map { preferences ->
@@ -63,7 +70,11 @@ class ConfigManager @Inject constructor(
             autoStartOnBoot = preferences[AUTO_START_ON_BOOT] ?: true,
             authKey = authKey,
             authValue = authValue,
-            useSecureConnection = preferences[USE_SECURE_CONNECTION] ?: false
+            useSecureConnection = preferences[USE_SECURE_CONNECTION] ?: false,
+            autoUploadSms = preferences[AUTO_UPLOAD_SMS] ?: true,
+            smsKeywords = preferences[SMS_KEYWORDS]?.toList() ?: listOf("验证码", "验证", "code", "Code", "CODE", "验证码是", "动态码", "校验码"),
+            smsFilterSender = preferences[SMS_FILTER_SENDER] ?: true,
+            trustedSenders = preferences[TRUSTED_SENDERS]?.toList() ?: listOf("10086", "10010", "10000", "95533", "95588", "95599")
         )
     }
     
@@ -83,6 +94,12 @@ class ConfigManager @Inject constructor(
             preferences[AUTH_KEY] = config.authKey
             preferences[AUTH_VALUE] = config.authValue
             preferences[USE_SECURE_CONNECTION] = config.useSecureConnection
+
+            // 保存短信相关配置
+            preferences[AUTO_UPLOAD_SMS] = config.autoUploadSms
+            preferences[SMS_KEYWORDS] = config.smsKeywords.toSet()
+            preferences[SMS_FILTER_SENDER] = config.smsFilterSender
+            preferences[TRUSTED_SENDERS] = config.trustedSenders.toSet()
         }
     }
     

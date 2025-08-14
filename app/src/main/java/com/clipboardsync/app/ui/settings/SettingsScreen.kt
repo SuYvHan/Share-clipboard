@@ -5,20 +5,24 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.clipboardsync.app.domain.model.AppConfig
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
     onNavigateBack: () -> Unit,
+    onNavigateToSmsSettings: () -> Unit = {},
     viewModel: SettingsViewModel = hiltViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
@@ -71,6 +75,14 @@ fun SettingsScreen(
                 onSyncImagesChange = viewModel::updateSyncImages,
                 onSyncFilesChange = viewModel::updateSyncFiles,
                 onUseSecureConnectionChange = viewModel::updateUseSecureConnection
+            )
+
+            HorizontalDivider()
+
+            // 短信设置
+            SmsSettingsSection(
+                config = config,
+                onNavigateToSmsSettings = onNavigateToSmsSettings
             )
 
             HorizontalDivider()
@@ -403,5 +415,73 @@ private fun SettingSwitch(
             checked = checked,
             onCheckedChange = onCheckedChange
         )
+    }
+}
+
+@Composable
+private fun SmsSettingsSection(
+    config: AppConfig,
+    onNavigateToSmsSettings: () -> Unit
+) {
+    Card {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            Text(
+                text = "短信验证码设置",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Medium
+            )
+
+            // 自动上传状态显示
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "自动上传短信验证码",
+                        style = MaterialTheme.typography.bodyLarge
+                    )
+                    Text(
+                        text = if (config.autoUploadSms) {
+                            "已启用 - 收到验证码短信时自动上传"
+                        } else {
+                            "已关闭 - 不会自动上传短信验证码"
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+
+                Icon(
+                    imageVector = if (config.autoUploadSms) {
+                        Icons.Default.CheckCircle
+                    } else {
+                        Icons.Default.Cancel
+                    },
+                    contentDescription = null,
+                    tint = if (config.autoUploadSms) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    }
+                )
+            }
+
+            // 详细设置按钮
+            OutlinedButton(
+                onClick = onNavigateToSmsSettings,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Icon(Icons.Default.Settings, contentDescription = null)
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("详细设置")
+                Spacer(modifier = Modifier.weight(1f))
+                Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = null)
+            }
+        }
     }
 }
