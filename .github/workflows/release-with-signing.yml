@@ -1,0 +1,244 @@
+name: Build Signed Release APK
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version (e.g., v1.0.0)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  packages: write
+
+env:
+  JAVA_VERSION: '17'
+
+jobs:
+  build-signed-apk:
+    name: Build Signed APK
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Get version
+      id: version
+      run: |
+        if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          echo "version=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+        else
+          echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Setup JDK
+      uses: actions/setup-java@v4
+      with:
+        java-version: ${{ env.JAVA_VERSION }}
+        distribution: 'temurin'
+
+    - name: Cache Gradle
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.gradle/caches
+          ~/.gradle/wrapper
+        key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*') }}
+        restore-keys: |
+          ${{ runner.os }}-gradle-
+
+    - name: Make gradlew executable
+      run: chmod +x gradlew
+
+    - name: Decode and setup keystore
+      env:
+        KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+      run: |
+        if [ -z "$KEYSTORE_BASE64" ]; then
+          echo "❌ 错误: 未找到KEYSTORE_BASE64 secret"
+          echo "请在GitHub仓库设置中添加以下secrets:"
+          echo "- KEYSTORE_BASE64 (keystore文件的Base64编码)"
+          echo "- KEYSTORE_PASSWORD (keystore密码)"
+          echo "- KEY_ALIAS (密钥别名)"
+          echo "- KEY_PASSWORD (密钥密码)"
+          exit 1
+        fi
+        
+        echo "🔐 解码keystore文件..."
+        echo "$KEYSTORE_BASE64" | base64 -d > app/keystore.jks
+        
+        if [ ! -f "app/keystore.jks" ]; then
+          echo "❌ keystore文件创建失败"
+          exit 1
+        fi
+        
+        echo "✅ keystore文件创建成功"
+        ls -la app/keystore.jks
+
+    - name: Verify keystore
+      env:
+        KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+        KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+      run: |
+        if [ -z "$KEYSTORE_PASSWORD" ] || [ -z "$KEY_ALIAS" ]; then
+          echo "❌ 错误: 缺少签名配置"
+          echo "请确保已设置以下secrets:"
+          echo "- KEYSTORE_PASSWORD"
+          echo "- KEY_ALIAS"
+          echo "- KEY_PASSWORD"
+          exit 1
+        fi
+        
+        echo "🔍 验证keystore..."
+        keytool -list -keystore app/keystore.jks -storepass "$KEYSTORE_PASSWORD" -alias "$KEY_ALIAS" -v
+        echo "✅ keystore验证成功"
+
+    - name: Build signed APK
+      env:
+        KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+        KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+        KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+      run: |
+        echo "🔨 构建签名APK..."
+        ./gradlew assembleRelease \
+          -Pandroid.injected.signing.store.password="$KEYSTORE_PASSWORD" \
+          -Pandroid.injected.signing.key.alias="$KEY_ALIAS" \
+          -Pandroid.injected.signing.key.password="$KEY_PASSWORD"
+
+    - name: Verify APK signature
+      run: |
+        APK_PATH=$(find app/build/outputs/apk/release -name "*.apk" | head -1)
+        echo "🔍 验证APK签名..."
+        echo "APK路径: $APK_PATH"
+        
+        # 检查APK是否存在
+        if [ ! -f "$APK_PATH" ]; then
+          echo "❌ APK文件不存在"
+          exit 1
+        fi
+        
+        # 使用aapt检查APK信息
+        aapt dump badging "$APK_PATH" | head -5
+        
+        echo "✅ APK构建成功"
+
+    - name: Get APK info
+      id: apk
+      run: |
+        APK_PATH=$(find app/build/outputs/apk/release -name "*.apk" | head -1)
+        APK_SIZE=$(du -h "$APK_PATH" | cut -f1)
+        APK_NAME="ClipboardSync-${{ steps.version.outputs.version }}-signed.apk"
+        
+        # 重命名APK
+        cp "$APK_PATH" "app/build/outputs/apk/release/$APK_NAME"
+        NEW_APK_PATH="app/build/outputs/apk/release/$APK_NAME"
+        
+        # 计算SHA256
+        APK_SHA256=$(sha256sum "$NEW_APK_PATH" | cut -d' ' -f1)
+        
+        echo "path=$NEW_APK_PATH" >> $GITHUB_OUTPUT
+        echo "size=$APK_SIZE" >> $GITHUB_OUTPUT
+        echo "name=$APK_NAME" >> $GITHUB_OUTPUT
+        echo "sha256=$APK_SHA256" >> $GITHUB_OUTPUT
+        
+        echo "📱 签名APK信息:"
+        echo "  文件名: $APK_NAME"
+        echo "  大小: $APK_SIZE"
+        echo "  SHA256: $APK_SHA256"
+
+    - name: Upload signed APK
+      uses: actions/upload-artifact@v4
+      with:
+        name: ClipboardSync-${{ steps.version.outputs.version }}-signed
+        path: ${{ steps.apk.outputs.path }}
+        retention-days: 90
+
+    - name: Generate changelog
+      id: changelog
+      run: |
+        echo "📝 生成更新日志..."
+        PREVIOUS_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+        
+        if [ -n "$PREVIOUS_TAG" ]; then
+          CHANGES=$(git log --pretty=format:"- %s" $PREVIOUS_TAG..HEAD)
+        else
+          CHANGES=$(git log --pretty=format:"- %s" -5)
+        fi
+        
+        if [ -z "$CHANGES" ]; then
+          CHANGES="- 版本更新"
+        fi
+        
+        {
+          echo "changes<<EOF"
+          echo "$CHANGES"
+          echo "EOF"
+        } >> $GITHUB_OUTPUT
+
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: ${{ steps.version.outputs.version }}
+        name: ClipboardSync ${{ steps.version.outputs.version }} (已签名)
+        files: ${{ steps.apk.outputs.path }}
+        draft: false
+        prerelease: false
+        body: |
+          ## 📱 剪切板同步应用 ${{ steps.version.outputs.version }}
+          
+          ### 🔐 签名状态: ✅ 已签名，可直接安装
+          
+          ### 📦 下载信息
+          - **APK文件**: ${{ steps.apk.outputs.name }}
+          - **文件大小**: ${{ steps.apk.outputs.size }}
+          - **SHA256校验**: `${{ steps.apk.outputs.sha256 }}`
+          - **构建时间**: ${{ github.event.head_commit.timestamp }}
+          
+          ### 🔄 更新内容
+          ${{ steps.changelog.outputs.changes }}
+          
+          ### 📲 安装说明
+          1. 📥 **下载APK文件** - 点击上方APK文件下载
+          2. ⚙️ **启用未知来源** - 在Android设置中允许安装未知来源应用
+          3. 📱 **安装应用** - 点击APK文件进行安装
+          4. 🔐 **授予权限** - 首次启动时授予必要权限
+          
+          ### ✨ 主要功能
+          - 🔄 **实时剪切板同步** - 多设备间无缝同步
+          - 📱 **多设备支持** - 支持Android、Windows、macOS
+          - 🖼️ **图片同步** - 支持图片和文件同步
+          - 🔒 **权限管理** - 智能权限检测和申请
+          - 🌙 **深色模式** - 跟随系统主题
+          
+          ### 📋 系统要求
+          - Android 8.0+ (API 26)
+          - 网络连接
+          - 存储权限
+          - 通知权限 (Android 13+)
+          
+          ### 🔐 安全信息
+          - ✅ 此APK已使用开发者证书签名
+          - ✅ 可以安全安装在Android设备上
+          - 🔍 SHA256校验和可用于验证文件完整性
+          
+          ### 🐛 问题反馈
+          如遇到问题，请在 [Issues](https://github.com/${{ github.repository }}/issues) 中反馈
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Success notification
+      run: |
+        echo "🎉 签名APK构建发布成功！"
+        echo "📱 版本: ${{ steps.version.outputs.version }}"
+        echo "📦 大小: ${{ steps.apk.outputs.size }}"
+        echo "🔐 SHA256: ${{ steps.apk.outputs.sha256 }}"
+        echo "🔗 下载链接: https://github.com/${{ github.repository }}/releases/tag/${{ steps.version.outputs.version }}"
+        echo ""
+        echo "📲 现在可以下载并安装签名的APK了！"

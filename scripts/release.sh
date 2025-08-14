@@ -143,4 +143,11 @@ fi
 print_info "查看构建状态: $REPO_URL/actions"
 print_info "查看发布页面: $REPO_URL/releases"
 
-print_success "发布流程已启动！🎉"
+print_success "🎉 自动发布流程已启动！"
+print_info "GitHub Actions将自动:"
+print_info "  1. 🔨 构建签名APK"
+print_info "  2. 📦 创建GitHub Release"
+print_info "  3. ⬆️ 上传APK到发行版"
+print_info ""
+print_info "🔗 查看构建进度: https://github.com/$(git config --get remote.origin.url | sed 's/.*github.com[:/]\([^.]*\).*/\1/')/actions"
+print_info "📦 查看发布页面: https://github.com/$(git config --get remote.origin.url | sed 's/.*github.com[:/]\([^.]*\).*/\1/')/releases"

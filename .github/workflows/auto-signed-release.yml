@@ -1,0 +1,207 @@
+name: Auto Signed Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+  packages: write
+
+env:
+  JAVA_VERSION: '17'
+
+jobs:
+  auto-release:
+    name: Auto Build & Release Signed APK
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Get version from tag
+      id: version
+      run: |
+        VERSION=${GITHUB_REF#refs/tags/}
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+        echo "🏷️ 版本: $VERSION"
+
+    - name: Setup JDK
+      uses: actions/setup-java@v4
+      with:
+        java-version: ${{ env.JAVA_VERSION }}
+        distribution: 'temurin'
+
+    - name: Cache Gradle
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.gradle/caches
+          ~/.gradle/wrapper
+        key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*') }}
+        restore-keys: |
+          ${{ runner.os }}-gradle-
+
+    - name: Make gradlew executable
+      run: chmod +x gradlew
+
+    - name: Setup signing
+      env:
+        KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+      run: |
+        if [ -z "$KEYSTORE_BASE64" ]; then
+          echo "❌ 未配置签名证书，将构建无签名APK"
+          echo "SIGNING_ENABLED=false" >> $GITHUB_ENV
+        else
+          echo "🔐 配置签名证书..."
+          echo "$KEYSTORE_BASE64" | base64 -d > app/keystore.jks
+          echo "SIGNING_ENABLED=true" >> $GITHUB_ENV
+          echo "✅ 签名证书配置完成"
+        fi
+
+    - name: Build signed APK
+      if: env.SIGNING_ENABLED == 'true'
+      env:
+        KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+        KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+        KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+      run: |
+        echo "🔨 构建签名APK..."
+        ./gradlew assembleRelease \
+          -Pandroid.injected.signing.store.password="$KEYSTORE_PASSWORD" \
+          -Pandroid.injected.signing.key.alias="$KEY_ALIAS" \
+          -Pandroid.injected.signing.key.password="$KEY_PASSWORD"
+
+    - name: Build unsigned APK
+      if: env.SIGNING_ENABLED == 'false'
+      run: |
+        echo "🔨 构建无签名APK..."
+        ./gradlew assembleRelease
+
+    - name: Prepare APK
+      id: apk
+      run: |
+        APK_PATH=$(find app/build/outputs/apk/release -name "*.apk" | head -1)
+        APK_SIZE=$(du -h "$APK_PATH" | cut -f1)
+        
+        if [ "$SIGNING_ENABLED" = "true" ]; then
+          APK_NAME="ClipboardSync-${{ steps.version.outputs.version }}-signed.apk"
+          SIGNED_STATUS="✅ 已签名"
+        else
+          APK_NAME="ClipboardSync-${{ steps.version.outputs.version }}-unsigned.apk"
+          SIGNED_STATUS="⚠️ 未签名"
+        fi
+        
+        # 重命名APK
+        cp "$APK_PATH" "app/build/outputs/apk/release/$APK_NAME"
+        NEW_APK_PATH="app/build/outputs/apk/release/$APK_NAME"
+        
+        # 计算SHA256
+        APK_SHA256=$(sha256sum "$NEW_APK_PATH" | cut -d' ' -f1)
+        
+        echo "path=$NEW_APK_PATH" >> $GITHUB_OUTPUT
+        echo "size=$APK_SIZE" >> $GITHUB_OUTPUT
+        echo "name=$APK_NAME" >> $GITHUB_OUTPUT
+        echo "sha256=$APK_SHA256" >> $GITHUB_OUTPUT
+        echo "signed_status=$SIGNED_STATUS" >> $GITHUB_OUTPUT
+        
+        echo "📱 APK信息:"
+        echo "  文件名: $APK_NAME"
+        echo "  大小: $APK_SIZE"
+        echo "  状态: $SIGNED_STATUS"
+
+    - name: Generate changelog
+      id: changelog
+      run: |
+        echo "📝 生成更新日志..."
+        PREVIOUS_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+        
+        if [ -n "$PREVIOUS_TAG" ]; then
+          echo "上一个版本: $PREVIOUS_TAG"
+          CHANGES=$(git log --pretty=format:"- %s" $PREVIOUS_TAG..HEAD)
+        else
+          echo "首次发布"
+          CHANGES=$(git log --pretty=format:"- %s" -10)
+        fi
+        
+        if [ -z "$CHANGES" ]; then
+          CHANGES="- 版本更新"
+        fi
+        
+        {
+          echo "changes<<EOF"
+          echo "$CHANGES"
+          echo "EOF"
+        } >> $GITHUB_OUTPUT
+
+    - name: Create Release
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: ${{ steps.version.outputs.version }}
+        name: ClipboardSync ${{ steps.version.outputs.version }}
+        files: ${{ steps.apk.outputs.path }}
+        draft: false
+        prerelease: false
+        generate_release_notes: true
+        body: |
+          ## 📱 剪切板同步应用 ${{ steps.version.outputs.version }}
+          
+          ### 📦 下载
+          **APK文件**: ${{ steps.apk.outputs.name }} (${{ steps.apk.outputs.size }})
+          **签名状态**: ${{ steps.apk.outputs.signed_status }}
+          **SHA256**: `${{ steps.apk.outputs.sha256 }}`
+          
+          ### 📲 安装说明
+          1. 📥 点击上方APK文件下载
+          2. ⚙️ 在Android设置中启用"未知来源"安装
+          3. 📱 点击APK文件安装
+          4. 🔐 授予必要权限
+          
+          ### 🔄 更新内容
+          ${{ steps.changelog.outputs.changes }}
+          
+          ### ✨ 功能特性
+          - 🔄 实时剪切板同步
+          - 📱 多设备支持
+          - 🖼️ 图片文件同步
+          - 🔒 智能权限管理
+          - 🌙 深色模式支持
+          - 📡 WebSocket实时通信
+          
+          ### 📋 系统要求
+          - Android 8.0+ (API 26)
+          - 网络连接
+          - 存储权限
+          - 通知权限
+          
+          ### 🐛 问题反馈
+          [提交Issue](https://github.com/${{ github.repository }}/issues) | [查看文档](https://github.com/${{ github.repository }}/blob/main/README.md)
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Upload to Artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: ClipboardSync-${{ steps.version.outputs.version }}
+        path: ${{ steps.apk.outputs.path }}
+        retention-days: 30
+
+    - name: Success notification
+      run: |
+        echo "🎉 自动发布完成！"
+        echo "📱 版本: ${{ steps.version.outputs.version }}"
+        echo "📦 文件: ${{ steps.apk.outputs.name }}"
+        echo "📏 大小: ${{ steps.apk.outputs.size }}"
+        echo "🔐 状态: ${{ steps.apk.outputs.signed_status }}"
+        echo "🔗 发布页面: https://github.com/${{ github.repository }}/releases/tag/${{ steps.version.outputs.version }}"
+        echo ""
+        if [ "$SIGNING_ENABLED" = "true" ]; then
+          echo "✅ APK已签名，可以直接安装！"
+        else
+          echo "⚠️ APK未签名，请配置签名证书以获得更好的安装体验"
+          echo "配置方法: 在仓库Settings → Secrets中添加KEYSTORE_BASE64等签名信息"
+        fi

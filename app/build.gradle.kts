@@ -21,6 +21,16 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    signingConfigs {
+        create("release") {
+            // GitHub Actions环境下的签名配置
+            storeFile = file("keystore.jks")
+            storePassword = System.getProperty("android.injected.signing.store.password")
+            keyAlias = System.getProperty("android.injected.signing.key.alias")
+            keyPassword = System.getProperty("android.injected.signing.key.password")
+        }
+    }
+
     buildTypes {
         debug {
             // 禁用调试版本的符号剥离以避免警告
@@ -33,6 +43,7 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            signingConfig = signingConfigs.getByName("release")
         }
     }
     compileOptions {
