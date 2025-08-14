@@ -23,8 +23,6 @@ fun AdvancedPermissionDialog(
     onOpenAutoStartSettings: () -> Unit,
     onOpenBasicPermissions: () -> Unit
 ) {
-    val context = LocalContext.current
-    
     AlertDialog(
         onDismissRequest = onDismiss,
         title = {

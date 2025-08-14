@@ -78,7 +78,7 @@ class SmsReceiver : BroadcastReceiver() {
             val messageBody = message.messageBody ?: ""
             val timestamp = message.timestampMillis
 
-            Log.d(tag, "处理短信 - 发送方: $sender, 内容: ${messageBody.take(50)}...")
+            Log.d(tag, "处理短信 - 发送方: $sender, 内容: ${messageBody.take(50)}..., 时间: $timestamp")
 
             // 检查发送方过滤（如果启用了过滤且发送方不在信任列表中）
             if (config.smsFilterSender && !isTrustedSender(sender, config.trustedSenders)) {

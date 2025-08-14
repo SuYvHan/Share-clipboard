@@ -86,14 +86,14 @@ class MainActivity : ComponentActivity() {
 
     private val batteryOptimizationLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
-    ) { result ->
+    ) { _ ->
         // 电池优化设置返回后，重新检查权限状态
         checkAdvancedPermissions()
     }
 
     private val autoStartSettingsLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
-    ) { result ->
+    ) { _ ->
         // 自启动设置返回后，重新检查权限状态
         checkAdvancedPermissions()
     }

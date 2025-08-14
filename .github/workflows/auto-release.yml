@@ -1,0 +1,259 @@
+name: Auto Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version_name:
+        description: 'Version name (e.g., 1.0.0)'
+        required: true
+        type: string
+      release_notes:
+        description: 'Release notes (optional)'
+        required: false
+        type: string
+      prerelease:
+        description: 'Mark as pre-release'
+        required: false
+        type: boolean
+        default: false
+
+env:
+  JAVA_VERSION: '17'
+  APP_NAME: 'ClipboardSync'
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  build-and-release:
+    name: Build and Create Release
+    runs-on: ubuntu-latest
+    
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      apk_path: ${{ steps.apk_info.outputs.apk_path }}
+      apk_size: ${{ steps.apk_info.outputs.apk_size }}
+      
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Get version info
+      id: version
+      run: |
+        if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          VERSION="${{ github.event.inputs.version_name }}"
+        else
+          VERSION=${GITHUB_REF#refs/tags/}
+        fi
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+        echo "Version: $VERSION"
+
+    - name: Set up JDK ${{ env.JAVA_VERSION }}
+      uses: actions/setup-java@v4
+      with:
+        java-version: ${{ env.JAVA_VERSION }}
+        distribution: 'temurin'
+
+    - name: Cache Gradle dependencies
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.gradle/caches
+          ~/.gradle/wrapper
+        key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+        restore-keys: |
+          ${{ runner.os }}-gradle-
+
+    - name: Grant execute permission for gradlew
+      run: chmod +x gradlew
+
+    - name: Decode Keystore
+      env:
+        KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+      run: |
+        if [ -n "$KEYSTORE_BASE64" ]; then
+          echo "$KEYSTORE_BASE64" | base64 -d > app/keystore.jks
+          echo "✅ Keystore decoded successfully"
+        else
+          echo "⚠️ No keystore configured"
+        fi
+
+    - name: Update version in build.gradle
+      run: |
+        VERSION="${{ steps.version.outputs.version }}"
+        VERSION_CODE=$(date +%s)
+        echo "Updating version to: $VERSION (code: $VERSION_CODE)"
+        
+        # 更新版本号和版本代码
+        sed -i "s/versionName = \".*\"/versionName = \"$VERSION\"/" app/build.gradle.kts
+        sed -i "s/versionCode = [0-9]*/versionCode = $VERSION_CODE/" app/build.gradle.kts
+
+    - name: Build Signed Release APK
+      env:
+        KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+        KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+        KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+      run: |
+        echo "🔨 Building signed release APK..."
+        if [ -f "app/keystore.jks" ]; then
+          echo "📝 Using keystore for signing"
+          ./gradlew assembleRelease \
+            -Pandroid.injected.signing.store.file=keystore.jks \
+            -Pandroid.injected.signing.store.password="$KEYSTORE_PASSWORD" \
+            -Pandroid.injected.signing.key.alias="$KEY_ALIAS" \
+            -Pandroid.injected.signing.key.password="$KEY_PASSWORD"
+        else
+          echo "⚠️ No keystore found, building unsigned release"
+          ./gradlew assembleRelease
+        fi
+
+    - name: Run tests
+      run: |
+        echo "🧪 Running tests..."
+        ./gradlew testReleaseUnitTest
+
+    - name: Generate APK info
+      id: apk_info
+      run: |
+        APK_PATH=$(find app/build/outputs/apk/release -name "*.apk" | head -1)
+        APK_SIZE=$(du -h "$APK_PATH" | cut -f1)
+        APK_SIZE_BYTES=$(stat -c%s "$APK_PATH")
+        APK_NAME=$(basename "$APK_PATH")
+        APK_SHA256=$(sha256sum "$APK_PATH" | cut -d' ' -f1)
+
+        # 重命名APK文件包含版本号
+        VERSION="${{ steps.version.outputs.version }}"
+        NEW_APK_NAME="${{ env.APP_NAME }}-${VERSION}.apk"
+        NEW_APK_PATH="app/build/outputs/apk/release/$NEW_APK_NAME"
+        cp "$APK_PATH" "$NEW_APK_PATH"
+
+        echo "apk_path=$NEW_APK_PATH" >> $GITHUB_OUTPUT
+        echo "apk_size=$APK_SIZE" >> $GITHUB_OUTPUT
+        echo "apk_size_bytes=$APK_SIZE_BYTES" >> $GITHUB_OUTPUT
+        echo "apk_name=$NEW_APK_NAME" >> $GITHUB_OUTPUT
+        echo "apk_sha256=$APK_SHA256" >> $GITHUB_OUTPUT
+
+        echo "📱 APK Info:"
+        echo "  - Path: $NEW_APK_PATH"
+        echo "  - Size: $APK_SIZE ($APK_SIZE_BYTES bytes)"
+        echo "  - Name: $NEW_APK_NAME"
+        echo "  - SHA256: $APK_SHA256"
+
+    - name: Upload APK Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ env.APP_NAME }}-${{ steps.version.outputs.version }}-release
+        path: ${{ steps.apk_info.outputs.apk_path }}
+        retention-days: 90
+
+    - name: Generate changelog
+      id: changelog
+      run: |
+        echo "📝 Generating changelog..."
+
+        # 获取上一个标签
+        PREVIOUS_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+
+        if [ -n "$PREVIOUS_TAG" ]; then
+          echo "Previous tag: $PREVIOUS_TAG"
+          CHANGELOG=$(git log --pretty=format:"- %s" $PREVIOUS_TAG..HEAD)
+        else
+          echo "No previous tag found, using last 10 commits"
+          CHANGELOG=$(git log --pretty=format:"- %s" -10)
+        fi
+
+        # 如果changelog为空，提供默认内容
+        if [ -z "$CHANGELOG" ]; then
+          CHANGELOG="- 版本更新"
+        fi
+
+        # 保存到GitHub输出
+        echo "changelog_content<<EOF" >> $GITHUB_OUTPUT
+        echo "$CHANGELOG" >> $GITHUB_OUTPUT
+        echo "EOF" >> $GITHUB_OUTPUT
+
+    - name: Create Release
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: ${{ steps.version.outputs.version }}
+        name: ${{ env.APP_NAME }} ${{ steps.version.outputs.version }}
+        draft: false
+        prerelease: ${{ github.event.inputs.prerelease == 'true' }}
+        files: ${{ steps.apk_info.outputs.apk_path }}
+        body: |
+          ## 📱 ${{ env.APP_NAME }} ${{ steps.version.outputs.version }}
+          
+          ### 📦 下载信息
+          - **APK文件**: [${{ steps.apk_info.outputs.apk_name }}](${{ github.server_url }}/${{ github.repository }}/releases/download/${{ steps.version.outputs.version }}/${{ steps.apk_info.outputs.apk_name }})
+          - **文件大小**: ${{ steps.apk_info.outputs.apk_size }}
+          - **SHA256**: `${{ steps.apk_info.outputs.apk_sha256 }}`
+          - **构建时间**: ${{ github.event.head_commit.timestamp }}
+          
+          ### 📋 更新内容
+          ${{ github.event.inputs.release_notes || '请查看下方提交记录了解详细更新内容' }}
+          
+          ### 🔄 提交记录
+          ${{ steps.changelog.outputs.changelog_content }}
+          
+          ### 🔧 安装说明
+          1. 📥 下载上方的APK文件
+          2. ⚙️ 在Android设备设置中启用"未知来源"应用安装
+          3. 📱 点击APK文件进行安装
+          4. 🔐 首次启动时授予必要权限
+          
+          ### ✨ 主要功能
+          - 🔄 **实时剪切板同步** - 多设备间无缝同步
+          - 📱 **多设备支持** - 支持Android、Windows、macOS
+          - 🖼️ **图片和文件同步** - 不仅限于文本内容
+          - 🔒 **权限智能管理** - 自动检测和申请必要权限
+          - 🌙 **深色模式支持** - 跟随系统主题
+          - 📡 **WebSocket实时通信** - 低延迟同步体验
+          
+          ### 📋 系统要求
+          - 🤖 Android 8.0 (API 26) 及以上
+          - 🌐 网络连接（WiFi或移动数据）
+          - 💾 存储权限
+          - 🔔 通知权限（Android 13+）
+          
+          ### 🐛 问题反馈
+          如遇到问题，请在 [Issues](https://github.com/${{ github.repository }}/issues) 中反馈。
+          
+          ### 🔗 相关链接
+          - [📖 使用文档](https://github.com/${{ github.repository }}/blob/main/README.md)
+          - [🔧 开发指南](https://github.com/${{ github.repository }}/blob/main/docs/)
+          - [💬 讨论区](https://github.com/${{ github.repository }}/discussions)
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  notify-success:
+    name: Notify Success
+    needs: build-and-release
+    runs-on: ubuntu-latest
+    if: success()
+    
+    steps:
+    - name: Success notification
+      run: |
+        echo "🎉 发布成功！"
+        echo "📱 版本: ${{ needs.build-and-release.outputs.version }}"
+        echo "📦 APK大小: ${{ needs.build-and-release.outputs.apk_size }}"
+        echo "🔗 下载链接: https://github.com/${{ github.repository }}/releases/tag/${{ needs.build-and-release.outputs.version }}"
+
+  notify-failure:
+    name: Notify Failure
+    needs: build-and-release
+    runs-on: ubuntu-latest
+    if: failure()
+    
+    steps:
+    - name: Failure notification
+      run: |
+        echo "❌ 发布失败！"
+        echo "🔍 请检查构建日志: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
