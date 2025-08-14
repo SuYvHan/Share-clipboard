@@ -160,11 +160,11 @@ class ClipboardSyncService : Service() {
             } ?: false
 
             Log.d(tag, "前台状态检查: $isInForeground")
-            return isInForeground
+            isInForeground
         } catch (e: Exception) {
             Log.w(tag, "Error checking foreground status: ${e.message}")
             // 如果检查失败，返回false以避免剪切板访问被拒绝
-            return false
+            false
         }
     }
 
@@ -183,7 +183,7 @@ class ClipboardSyncService : Service() {
 
         // 尝试简单的剪切板访问测试
         return try {
-            val testClip = clipboardManager.primaryClip
+            clipboardManager.primaryClip // 测试访问剪切板
             Log.d(tag, "剪切板访问测试成功")
             true
         } catch (e: SecurityException) {

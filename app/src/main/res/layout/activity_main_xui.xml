@@ -17,7 +17,7 @@
             android:layout_height="?attr/actionBarSize"
             app:title="剪切板同步"
             app:titleTextColor="?attr/colorOnPrimary"
-            style="@style/ToolbarStyle" />
+            android:background="?attr/colorPrimary" />
 
     </com.google.android.material.appbar.AppBarLayout>
 
@@ -41,8 +41,7 @@
                 app:cardCornerRadius="12dp"
                 app:cardElevation="4dp"
                 app:cardBackgroundColor="?attr/colorSurfaceVariant"
-                android:visibility="gone"
-                style="@style/CardStyle">
+                android:visibility="gone">
 
         <LinearLayout
             android:layout_width="match_parent"
@@ -147,7 +146,7 @@
         android:layout_gravity="bottom|end"
         android:layout_margin="16dp"
         android:src="@android:drawable/ic_input_add"
-        app:tint="?attr/colorOnPrimary"
-        style="@style/FabStyle" />
+        app:backgroundTint="?attr/colorPrimary"
+        app:tint="?attr/colorOnPrimary" />
 
 </androidx.coordinatorlayout.widget.CoordinatorLayout>
