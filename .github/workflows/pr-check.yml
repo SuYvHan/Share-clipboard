@@ -1,0 +1,226 @@
+name: PR Check
+
+on:
+  pull_request:
+    branches: [ main, master ]
+    types: [opened, synchronize, reopened]
+
+env:
+  JAVA_VERSION: '17'
+
+jobs:
+  code-quality:
+    name: Code Quality Check
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Set up JDK ${{ env.JAVA_VERSION }}
+      uses: actions/setup-java@v4
+      with:
+        java-version: ${{ env.JAVA_VERSION }}
+        distribution: 'temurin'
+
+    - name: Cache Gradle dependencies
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.gradle/caches
+          ~/.gradle/wrapper
+        key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+        restore-keys: |
+          ${{ runner.os }}-gradle-
+
+    - name: Grant execute permission for gradlew
+      run: chmod +x gradlew
+
+    - name: Run Kotlin linter
+      run: ./gradlew ktlintCheck || true
+
+    - name: Run Android Lint
+      run: ./gradlew lintDebug
+
+    - name: Upload lint results
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: lint-results
+        path: app/build/reports/lint-results-debug.html
+        retention-days: 7
+
+  build-test:
+    name: Build and Test
+    runs-on: ubuntu-latest
+    
+    strategy:
+      matrix:
+        api-level: [26, 30, 34]
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up JDK ${{ env.JAVA_VERSION }}
+      uses: actions/setup-java@v4
+      with:
+        java-version: ${{ env.JAVA_VERSION }}
+        distribution: 'temurin'
+
+    - name: Cache Gradle dependencies
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.gradle/caches
+          ~/.gradle/wrapper
+        key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+        restore-keys: |
+          ${{ runner.os }}-gradle-
+
+    - name: Grant execute permission for gradlew
+      run: chmod +x gradlew
+
+    - name: Build Debug APK
+      run: ./gradlew assembleDebug
+
+    - name: Run unit tests
+      run: ./gradlew testDebugUnitTest
+
+    - name: Generate test report
+      if: always()
+      run: ./gradlew jacocoTestReport || true
+
+    - name: Upload test results
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: test-results-api-${{ matrix.api-level }}
+        path: |
+          app/build/reports/tests/
+          app/build/reports/jacoco/
+        retention-days: 7
+
+  security-scan:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Run Trivy vulnerability scanner
+      uses: aquasecurity/trivy-action@master
+      with:
+        scan-type: 'fs'
+        scan-ref: '.'
+        format: 'sarif'
+        output: 'trivy-results.sarif'
+
+    - name: Upload Trivy scan results
+      if: always()
+      uses: github/codeql-action/upload-sarif@v3
+      with:
+        sarif_file: 'trivy-results.sarif'
+
+  size-check:
+    name: APK Size Check
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up JDK ${{ env.JAVA_VERSION }}
+      uses: actions/setup-java@v4
+      with:
+        java-version: ${{ env.JAVA_VERSION }}
+        distribution: 'temurin'
+
+    - name: Cache Gradle dependencies
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.gradle/caches
+          ~/.gradle/wrapper
+        key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+        restore-keys: |
+          ${{ runner.os }}-gradle-
+
+    - name: Grant execute permission for gradlew
+      run: chmod +x gradlew
+
+    - name: Build Debug APK
+      run: ./gradlew assembleDebug
+
+    - name: Check APK size
+      run: |
+        APK_PATH=$(find app/build/outputs/apk/debug -name "*.apk" | head -1)
+        APK_SIZE=$(stat -c%s "$APK_PATH")
+        APK_SIZE_MB=$((APK_SIZE / 1024 / 1024))
+        
+        echo "📱 APK Size: ${APK_SIZE_MB}MB"
+        
+        # 设置大小限制 (50MB)
+        MAX_SIZE_MB=50
+        if [ $APK_SIZE_MB -gt $MAX_SIZE_MB ]; then
+          echo "❌ APK size (${APK_SIZE_MB}MB) exceeds limit (${MAX_SIZE_MB}MB)"
+          exit 1
+        else
+          echo "✅ APK size is within limit"
+        fi
+
+  pr-comment:
+    name: PR Comment
+    needs: [code-quality, build-test, size-check]
+    runs-on: ubuntu-latest
+    if: always()
+    
+    steps:
+    - name: Comment PR
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const { data: comments } = await github.rest.issues.listComments({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            issue_number: context.issue.number,
+          });
+          
+          const botComment = comments.find(comment => 
+            comment.user.type === 'Bot' && comment.body.includes('🤖 PR检查结果')
+          );
+          
+          const body = `🤖 **PR检查结果**
+          
+          | 检查项 | 状态 |
+          |--------|------|
+          | 代码质量 | ${{ needs.code-quality.result == 'success' && '✅ 通过' || '❌ 失败' }} |
+          | 构建测试 | ${{ needs.build-test.result == 'success' && '✅ 通过' || '❌ 失败' }} |
+          | APK大小 | ${{ needs.size-check.result == 'success' && '✅ 通过' || '❌ 失败' }} |
+          
+          📋 **详细信息**
+          - 构建时间: ${new Date().toLocaleString()}
+          - 提交: ${context.sha.substring(0, 7)}
+          
+          ${needs.code-quality.result !== 'success' || needs.build-test.result !== 'success' || needs.size-check.result !== 'success' 
+            ? '⚠️ 请检查失败的项目并修复问题' 
+            : '🎉 所有检查都通过了！'}`;
+          
+          if (botComment) {
+            await github.rest.issues.updateComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: botComment.id,
+              body: body
+            });
+          } else {
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: body
+            });
+          }
