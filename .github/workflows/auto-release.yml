@@ -118,17 +118,23 @@ jobs:
         APK_SIZE_BYTES=$(stat -c%s "$APK_PATH")
         APK_NAME=$(basename "$APK_PATH")
         APK_SHA256=$(sha256sum "$APK_PATH" | cut -d' ' -f1)
-        
-        echo "apk_path=$APK_PATH" >> $GITHUB_OUTPUT
+
+        # 重命名APK文件包含版本号
+        VERSION="${{ steps.version.outputs.version }}"
+        NEW_APK_NAME="${{ env.APP_NAME }}-${VERSION}.apk"
+        NEW_APK_PATH="app/build/outputs/apk/release/$NEW_APK_NAME"
+        cp "$APK_PATH" "$NEW_APK_PATH"
+
+        echo "apk_path=$NEW_APK_PATH" >> $GITHUB_OUTPUT
         echo "apk_size=$APK_SIZE" >> $GITHUB_OUTPUT
         echo "apk_size_bytes=$APK_SIZE_BYTES" >> $GITHUB_OUTPUT
-        echo "apk_name=$APK_NAME" >> $GITHUB_OUTPUT
+        echo "apk_name=$NEW_APK_NAME" >> $GITHUB_OUTPUT
         echo "apk_sha256=$APK_SHA256" >> $GITHUB_OUTPUT
-        
+
         echo "📱 APK Info:"
-        echo "  - Path: $APK_PATH"
+        echo "  - Path: $NEW_APK_PATH"
         echo "  - Size: $APK_SIZE ($APK_SIZE_BYTES bytes)"
-        echo "  - Name: $APK_NAME"
+        echo "  - Name: $NEW_APK_NAME"
         echo "  - SHA256: $APK_SHA256"
 
     - name: Upload APK Artifact
@@ -142,10 +148,10 @@ jobs:
       id: changelog
       run: |
         echo "📝 Generating changelog..."
-        
+
         # 获取上一个标签
         PREVIOUS_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
-        
+
         if [ -n "$PREVIOUS_TAG" ]; then
           echo "Previous tag: $PREVIOUS_TAG"
           CHANGELOG=$(git log --pretty=format:"- %s" $PREVIOUS_TAG..HEAD)
@@ -153,10 +159,16 @@ jobs:
           echo "No previous tag found, using last 10 commits"
           CHANGELOG=$(git log --pretty=format:"- %s" -10)
         fi
-        
-        # 保存到文件
-        echo "$CHANGELOG" > changelog.txt
-        echo "changelog_file=changelog.txt" >> $GITHUB_OUTPUT
+
+        # 如果changelog为空，提供默认内容
+        if [ -z "$CHANGELOG" ]; then
+          CHANGELOG="- 版本更新"
+        fi
+
+        # 保存到GitHub输出
+        echo "changelog_content<<EOF" >> $GITHUB_OUTPUT
+        echo "$CHANGELOG" >> $GITHUB_OUTPUT
+        echo "EOF" >> $GITHUB_OUTPUT
 
     - name: Create Release
       uses: softprops/action-gh-release@v1
@@ -179,7 +191,7 @@ jobs:
           ${{ github.event.inputs.release_notes || '请查看下方提交记录了解详细更新内容' }}
           
           ### 🔄 提交记录
-          $(cat changelog.txt)
+          ${{ steps.changelog.outputs.changelog_content }}
           
           ### 🔧 安装说明
           1. 📥 下载上方的APK文件
