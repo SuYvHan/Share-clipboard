@@ -5,6 +5,7 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
@@ -34,6 +35,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.clipboardsync.app.domain.model.ClipboardType
 import com.clipboardsync.app.service.clipboard.ClipboardSyncService
+import com.clipboardsync.app.ui.components.AdvancedPermissionDialog
 import com.clipboardsync.app.ui.components.ClipboardItemCard
 import com.clipboardsync.app.ui.components.PermissionDialog
 import com.clipboardsync.app.ui.components.PermissionDeniedDialog
@@ -48,11 +50,15 @@ class MainActivity : ComponentActivity() {
 
     private val viewModel: MainViewModel by viewModels()
     private lateinit var clipboardManager: ClipboardManager
+    private lateinit var sharedPreferences: SharedPreferences
 
     private var showPermissionDialog by mutableStateOf(false)
     private var showTextUploadDialog by mutableStateOf(false)
     private var showPermissionDeniedDialog by mutableStateOf(false)
     private var showClipboardLimitationDialog by mutableStateOf(false)
+    private var showAdvancedPermissionDialog by mutableStateOf(false)
+    private var permissionCheckResult by mutableStateOf<PermissionUtils.PermissionCheckResult?>(null)
+    private var isPermissionCheckFromSettings by mutableStateOf(false)
 
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -77,11 +83,26 @@ class MainActivity : ComponentActivity() {
     ) { uri ->
         uri?.let { viewModel.handleFileSelected(it) }
     }
+
+    private val batteryOptimizationLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        // 电池优化设置返回后，重新检查权限状态
+        checkAdvancedPermissions()
+    }
+
+    private val autoStartSettingsLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        // 自启动设置返回后，重新检查权限状态
+        checkAdvancedPermissions()
+    }
     
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
         clipboardManager = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        sharedPreferences = getSharedPreferences("app_preferences", Context.MODE_PRIVATE)
 
         // 通知服务应用已进入前台
         notifyServiceAppInForeground()
@@ -119,6 +140,13 @@ class MainActivity : ComponentActivity() {
                             },
                             onNavigateToSmsSettings = {
                                 navController.navigate("sms_settings")
+                            },
+                            onShowPermissionCheck = {
+                                // 重新显示权限检查对话框
+                                val result = PermissionUtils.checkAllPermissions(this@MainActivity)
+                                permissionCheckResult = result
+                                isPermissionCheckFromSettings = true
+                                showAdvancedPermissionDialog = true
                             }
                         )
                     }
@@ -186,15 +214,46 @@ class MainActivity : ComponentActivity() {
                         onDismiss = { showClipboardLimitationDialog = false }
                     )
                 }
+
+                // 高级权限检查对话框
+                if (showAdvancedPermissionDialog && permissionCheckResult != null) {
+                    AdvancedPermissionDialog(
+                        permissionResult = permissionCheckResult!!,
+                        onDismiss = {
+                            showAdvancedPermissionDialog = false
+                            // 只有在首次启动时才标记为已显示
+                            if (!isPermissionCheckFromSettings) {
+                                markPermissionCheckShown()
+                            }
+                            isPermissionCheckFromSettings = false
+                        },
+                        onRequestBatteryOptimization = {
+                            showAdvancedPermissionDialog = false
+                            requestBatteryOptimization()
+                        },
+                        onOpenAutoStartSettings = {
+                            showAdvancedPermissionDialog = false
+                            openAutoStartSettings()
+                        },
+                        onOpenBasicPermissions = {
+                            showAdvancedPermissionDialog = false
+                            requestPermissions()
+                        }
+                    )
+                }
             }
         }
         
         // 检查权限并启动服务
         checkPermissionsAndStartService()
 
-        // 如果是Android 12+，显示剪切板限制说明
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        // 检查高级权限（电池优化、自启动）- 只在首次启动时显示
+        checkAdvancedPermissionsIfFirstTime()
+
+        // 如果是Android 12+，显示剪切板限制说明 - 只在首次启动时显示
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && isFirstTimeShowingClipboardLimitation()) {
             showClipboardLimitationDialog = true
+            markClipboardLimitationShown()
         }
     }
 
@@ -251,6 +310,112 @@ class MainActivity : ComponentActivity() {
             data = Uri.fromParts("package", packageName, null)
         }
         startActivity(intent)
+    }
+
+    /**
+     * 检查高级权限（电池优化、自启动）- 只在首次启动时显示
+     */
+    private fun checkAdvancedPermissionsIfFirstTime() {
+        if (isFirstTimeShowingPermissionCheck()) {
+            val result = PermissionUtils.checkAllPermissions(this)
+            permissionCheckResult = result
+
+            // 如果有需要用户注意的权限问题，显示对话框
+            if (result.recommendations.isNotEmpty()) {
+                isPermissionCheckFromSettings = false
+                showAdvancedPermissionDialog = true
+                markPermissionCheckShown()
+            } else {
+                // 即使没有权限问题，也标记为已显示，避免后续再次检查
+                markPermissionCheckShown()
+            }
+
+            Log.d("MainActivity", "首次启动权限检查结果: $result")
+        } else {
+            Log.d("MainActivity", "非首次启动，跳过权限检查对话框")
+        }
+    }
+
+    /**
+     * 检查高级权限（不显示对话框，仅用于手动检查）
+     */
+    private fun checkAdvancedPermissions() {
+        val result = PermissionUtils.checkAllPermissions(this)
+        permissionCheckResult = result
+        Log.d("MainActivity", "权限检查结果: $result")
+    }
+
+    /**
+     * 请求忽略电池优化
+     */
+    private fun requestBatteryOptimization() {
+        val intent = PermissionUtils.requestIgnoreBatteryOptimization(this)
+        if (intent != null) {
+            try {
+                batteryOptimizationLauncher.launch(intent)
+            } catch (e: Exception) {
+                Log.w("MainActivity", "无法打开电池优化设置: ${e.message}")
+            }
+        }
+    }
+
+    /**
+     * 打开自启动设置
+     */
+    private fun openAutoStartSettings() {
+        val intent = PermissionUtils.getAutoStartSettingsIntent(this)
+        if (intent != null) {
+            try {
+                autoStartSettingsLauncher.launch(intent)
+            } catch (e: Exception) {
+                Log.w("MainActivity", "无法打开自启动设置: ${e.message}")
+            }
+        }
+    }
+
+    /**
+     * 检查是否是首次显示权限检查对话框
+     */
+    private fun isFirstTimeShowingPermissionCheck(): Boolean {
+        return !sharedPreferences.getBoolean("permission_check_shown", false)
+    }
+
+    /**
+     * 标记权限检查对话框已显示
+     */
+    private fun markPermissionCheckShown() {
+        sharedPreferences.edit()
+            .putBoolean("permission_check_shown", true)
+            .apply()
+        Log.d("MainActivity", "已标记权限检查对话框为已显示")
+    }
+
+    /**
+     * 检查是否是首次显示剪切板限制说明
+     */
+    private fun isFirstTimeShowingClipboardLimitation(): Boolean {
+        return !sharedPreferences.getBoolean("clipboard_limitation_shown", false)
+    }
+
+    /**
+     * 标记剪切板限制说明已显示
+     */
+    private fun markClipboardLimitationShown() {
+        sharedPreferences.edit()
+            .putBoolean("clipboard_limitation_shown", true)
+            .apply()
+        Log.d("MainActivity", "已标记剪切板限制说明为已显示")
+    }
+
+    /**
+     * 重置首次启动标记（用于测试或重新显示对话框）
+     */
+    private fun resetFirstTimeFlags() {
+        sharedPreferences.edit()
+            .putBoolean("permission_check_shown", false)
+            .putBoolean("clipboard_limitation_shown", false)
+            .apply()
+        Log.d("MainActivity", "已重置首次启动标记")
     }
 }
 

@@ -23,6 +23,7 @@ import com.clipboardsync.app.domain.model.AppConfig
 fun SettingsScreen(
     onNavigateBack: () -> Unit,
     onNavigateToSmsSettings: () -> Unit = {},
+    onShowPermissionCheck: () -> Unit = {},
     viewModel: SettingsViewModel = hiltViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
@@ -92,6 +93,13 @@ fun SettingsScreen(
                 config = config,
                 onEnableNotificationsChange = viewModel::updateEnableNotifications,
                 onAutoStartOnBootChange = viewModel::updateAutoStartOnBoot
+            )
+
+            HorizontalDivider()
+
+            // 权限管理
+            PermissionManagementSection(
+                onShowPermissionCheck = onShowPermissionCheck
             )
 
             HorizontalDivider()
@@ -481,6 +489,85 @@ private fun SmsSettingsSection(
                 Text("详细设置")
                 Spacer(modifier = Modifier.weight(1f))
                 Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = null)
+            }
+        }
+    }
+}
+
+@Composable
+private fun PermissionManagementSection(
+    onShowPermissionCheck: () -> Unit
+) {
+    Card {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            Text(
+                text = "权限管理",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Medium
+            )
+
+            // 权限检查说明
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "权限检查",
+                        style = MaterialTheme.typography.bodyLarge
+                    )
+                    Text(
+                        text = "检查应用权限状态，包括电池优化和自启动权限",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+
+                Icon(
+                    imageVector = Icons.Default.Security,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary
+                )
+            }
+
+            // 重新显示权限检查按钮
+            OutlinedButton(
+                onClick = onShowPermissionCheck,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Icon(Icons.Default.Refresh, contentDescription = null)
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("重新检查权限")
+            }
+
+            // 权限说明
+            Card(
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                )
+            ) {
+                Column(
+                    modifier = Modifier.padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = "💡 权限说明",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Medium
+                    )
+
+                    Text(
+                        text = "• 基础权限：存储、通知等应用基本功能权限\n" +
+                              "• 电池优化：关闭后可确保后台服务正常运行\n" +
+                              "• 自启动权限：开启后可在开机时自动启动应用",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
         }
     }
