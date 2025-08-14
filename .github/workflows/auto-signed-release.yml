@@ -4,6 +4,17 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (e.g., v1.0.0)'
+        required: true
+        type: string
+      create_tag:
+        description: 'Create new tag'
+        required: false
+        type: boolean
+        default: true
 
 permissions:
   contents: write
@@ -23,12 +34,17 @@ jobs:
       with:
         fetch-depth: 0
 
-    - name: Get version from tag
+    - name: Get version
       id: version
       run: |
-        VERSION=${GITHUB_REF#refs/tags/}
+        if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          VERSION="${{ github.event.inputs.version }}"
+          echo "🖱️ 手动触发，版本: $VERSION"
+        else
+          VERSION=${GITHUB_REF#refs/tags/}
+          echo "🏷️ 标签触发，版本: $VERSION"
+        fi
         echo "version=$VERSION" >> $GITHUB_OUTPUT
-        echo "🏷️ 版本: $VERSION"
 
     - name: Setup JDK
       uses: actions/setup-java@v4
@@ -48,6 +64,23 @@ jobs:
 
     - name: Make gradlew executable
       run: chmod +x gradlew
+
+    - name: Create tag (if manual trigger)
+      if: github.event_name == 'workflow_dispatch' && github.event.inputs.create_tag == 'true'
+      run: |
+        VERSION="${{ steps.version.outputs.version }}"
+        echo "🏷️ 创建标签: $VERSION"
+
+        # 检查标签是否已存在
+        if git rev-parse "$VERSION" >/dev/null 2>&1; then
+          echo "⚠️ 标签 $VERSION 已存在，跳过创建"
+        else
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+          git tag -a "$VERSION" -m "Release $VERSION (created by GitHub Actions)"
+          git push origin "$VERSION"
+          echo "✅ 标签 $VERSION 已创建并推送"
+        fi
 
     - name: Setup signing
       env:
