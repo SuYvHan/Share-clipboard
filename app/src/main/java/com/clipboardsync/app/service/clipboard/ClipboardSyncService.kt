@@ -54,6 +54,10 @@ class ClipboardSyncService : Service() {
     private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var lastForegroundCheck: Long = 0 // 记录最后一次前台检查时间
     private var pendingClipboardCheck = false // 是否有待处理的剪切板检查
+
+    // 缓存最近同步的内容，避免重复同步
+    private val recentSyncedContents = mutableSetOf<String>()
+    private var lastSyncCacheCleanup = 0L
     
     private val tag = "ClipboardSyncService"
     
@@ -383,6 +387,9 @@ class ClipboardSyncService : Service() {
             // 清理过期的同步记录
             cleanupExpiredSyncRecords()
 
+            // 清理过期的同步内容缓存
+            cleanupSyncContentCache()
+
             val config = configRepository.getConfig().first()
             if (!config.autoSync) {
                 Log.d(tag, "自动同步已关闭，跳过剪切板处理")
@@ -429,14 +436,24 @@ class ClipboardSyncService : Service() {
             // 检查是否是刚刚同步设置的内容（防止循环）
             val currentTime = System.currentTimeMillis()
             if (currentContent == lastSyncedContent &&
-                (currentTime - syncSetTimestamp) < 3000) { // 3秒内的同步内容
+                (currentTime - syncSetTimestamp) < 5000) { // 5秒内的同步内容
                 Log.d(tag, "跳过刚刚同步设置的内容，避免循环: ${currentContent.take(50)}...")
                 lastClipboardContent = currentContent // 更新记录但不处理
                 return
             }
 
+            // 额外检查：如果内容与最近接收的同步内容相同，也跳过
+            if (recentSyncedContents.contains(currentContent)) {
+                Log.d(tag, "跳过最近同步过的内容，避免重复: ${currentContent.take(50)}...")
+                lastClipboardContent = currentContent
+                return
+            }
+
             lastClipboardContent = currentContent
-            
+
+            // 将发送的内容也添加到缓存，避免接收时重复处理
+            recentSyncedContents.add(currentContent)
+
             val clipboardItem = when {
                 item.text != null -> createTextClipboardItem(currentContent, config)
                 item.uri != null -> createImageClipboardItem(item.uri, config)
@@ -497,7 +514,7 @@ class ClipboardSyncService : Service() {
         } finally {
             // 延迟重新启用剪切板监听，避免立即触发
             serviceScope.launch {
-                kotlinx.coroutines.delay(2000) // 等待2秒，给足够时间避免循环
+                kotlinx.coroutines.delay(3000) // 等待3秒，给足够时间避免循环
                 isProcessingClipboard = false
                 Log.d(tag, "重新启用剪切板监听，同步内容: ${lastSyncedContent?.take(50)}")
             }
@@ -871,6 +888,9 @@ class ClipboardSyncService : Service() {
                             return@let
                         }
 
+                        // 将接收到的内容添加到缓存，避免重复同步
+                        recentSyncedContents.add(item.content)
+
                         // 如果是文本类型，直接设置到系统剪切板
                         if (item.type == com.clipboardsync.app.domain.model.ClipboardType.text) {
                             Log.d(tag, "设置文本内容到系统剪切板: ${item.content.take(50)}...")
@@ -917,6 +937,19 @@ class ClipboardSyncService : Service() {
             Log.d(tag, "清理过期的同步记录")
             lastSyncedContent = null
             syncSetTimestamp = 0
+        }
+    }
+
+    /**
+     * 清理过期的同步内容缓存
+     */
+    private fun cleanupSyncContentCache() {
+        val currentTime = System.currentTimeMillis()
+        // 每5分钟清理一次缓存
+        if (currentTime - lastSyncCacheCleanup > 300000) {
+            recentSyncedContents.clear()
+            lastSyncCacheCleanup = currentTime
+            Log.d(tag, "已清理同步内容缓存")
         }
     }
 }
