@@ -84,7 +84,15 @@ class ClipboardRepositoryImpl @Inject constructor(
     override suspend fun getUnsyncedItems(): List<ClipboardItem> {
         return clipboardDao.getUnsyncedItems().map { it.toDomainModel() }
     }
-    
+
+    override suspend fun getSyncedItems(): List<ClipboardItem> {
+        return clipboardDao.getSyncedItems().map { it.toDomainModel() }
+    }
+
+    override suspend fun isContentSynced(content: String): Boolean {
+        return clipboardDao.isContentSynced(content)
+    }
+
     override suspend fun cleanupOldItems(maxItems: Int, maxDays: Int) {
         // 删除超过指定天数的项目
         val cutoffTime = System.currentTimeMillis() - TimeUnit.DAYS.toMillis(maxDays.toLong())

@@ -140,11 +140,16 @@ object ImageSaveUtils {
                 Log.d(TAG, "Downloading image from URL: $imageUrl")
                 
                 // 1. 下载图片到临时文件
-                val request = Request.Builder()
+                val requestBuilder = Request.Builder()
                     .url(imageUrl)
                     .addHeader("accept", "application/octet-stream")
-                    .addHeader(authKey, authValue)
-                    .build()
+
+                // 只有当authKey不为空时才添加认证头
+                if (authKey.isNotEmpty()) {
+                    requestBuilder.addHeader(authKey, authValue)
+                }
+
+                val request = requestBuilder.build()
                 
                 val response = httpClient.newCall(request).execute()
                 

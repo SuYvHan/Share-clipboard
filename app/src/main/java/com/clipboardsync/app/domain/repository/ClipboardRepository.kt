@@ -18,6 +18,8 @@ interface ClipboardRepository {
     suspend fun markAsSynced(id: String)
     suspend fun markAsSynced(ids: List<String>)
     suspend fun getUnsyncedItems(): List<ClipboardItem>
+    suspend fun getSyncedItems(): List<ClipboardItem>
+    suspend fun isContentSynced(content: String): Boolean
     suspend fun cleanupOldItems(maxItems: Int, maxDays: Int)
     suspend fun getItemCount(): Int
     suspend fun getItemCountByType(type: ClipboardType): Int

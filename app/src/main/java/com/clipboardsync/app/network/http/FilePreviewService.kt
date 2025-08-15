@@ -32,12 +32,16 @@ class FilePreviewService @Inject constructor(
                 Log.d(tag, "Fetching file preview from: $url")
                 Log.d(tag, "Using itemId: $itemId, fileName: $fileName, encoded: $encodedFileName")
                 
-                val request = Request.Builder()
+                val requestBuilder = Request.Builder()
                     .url(url)
                     .addHeader("accept", "application/octet-stream")
-                    .addHeader(config.authKey, config.authValue)
-                    .get()
-                    .build()
+
+                // 只有当authKey不为空时才添加认证头
+                if (config.authKey.isNotEmpty()) {
+                    requestBuilder.addHeader(config.authKey, config.authValue)
+                }
+
+                val request = requestBuilder.get().build()
 
                 Log.d(tag, "Request headers: ${request.headers}")
                 Log.d(tag, "Auth header: ${config.authKey} = ${config.authValue}")
